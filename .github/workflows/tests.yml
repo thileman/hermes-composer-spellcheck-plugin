@@ -1,0 +1,122 @@
+name: Tests
+
+# The plugin's own suite. Every suite reads the REAL desktop/plugin.js and
+# exercises the real functions out of it — nothing is re-implemented, so a
+# test cannot pass while the shipped code is broken.
+#
+# These exist because the failures they cover are all SILENT: a dead
+# Tailwind class renders invisible text, a jsx() call that passes children as
+# the third argument renders an empty element, and a code-span mask that
+# cannot be undone corrupts the user's draft. None of them raise.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/plugin.js"
+      - "tests/**"
+      - "scripts/**"
+      - ".github/workflows/tests.yml"
+  pull_request:
+    paths:
+      - "desktop/plugin.js"
+      - "tests/**"
+      - "scripts/**"
+      - ".github/workflows/tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install test dependencies
+        run: npm install --no-save --no-package-lock jsdom @babel/parser
+
+      - name: Run the test suites
+        run: node scripts/run-tests.cjs
+
+  syntax:
+    name: esm parse + import
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # `node --check` on a .mjs file validates the module syntax the loader
+      # will actually evaluate. A plain `.js` check would run in script mode,
+      # where a top-level `export` is a syntax error and the file cannot load.
+      - name: Parse as an ES module
+        run: |
+          set -euo pipefail
+          cp desktop/plugin.js plugin.mjs
+          node --check plugin.mjs
+          echo "ESM parse OK"
+
+      # The loader evaluates the plugin as a blob import with the SDK shim
+      # resolved from '@hermes/plugin-sdk'. Importing it for real is the only
+      # check that catches a bad export name, a stray token, or a missing
+      # import — `node --check` cannot resolve any of those.
+      - name: Import the plugin with a stubbed SDK
+        run: |
+          set -euo pipefail
+          mkdir -p stub/node_modules/@hermes/plugin-sdk stub/node_modules/react
+          cat > stub/node_modules/@hermes/plugin-sdk/index.js <<'EOF'
+          const noop = () => {}
+          export const atom = (initial) => { let v = initial; return { get: () => v, set: (n) => { v = n }, listen: () => () => {} } }
+          export const Button = noop
+          export const Codicon = noop
+          export const EmptyState = noop
+          export const Input = noop
+          export const ListRow = noop
+          export const Switch = noop
+          export const ToggleRow = noop
+          export const SearchField = noop
+          export const host = { notify: noop }
+          export const useValue = (a) => a.get()
+          export const ROUTES_AREA = 'routes'
+          export const SIDEBAR_NAV_AREA = 'sidebar-nav'
+          EOF
+          echo '{"name":"@hermes/plugin-sdk","type":"module","main":"index.js"}' > stub/node_modules/@hermes/plugin-sdk/package.json
+          cat > stub/node_modules/react/index.js <<'EOF'
+          export const useState = (v) => [v, () => {}]
+          EOF
+          echo '{"name":"react","type":"module","main":"index.js"}' > stub/node_modules/react/package.json
+          cat > stub/node_modules/react/jsx-runtime.js <<'EOF'
+          export const jsx = (t, p) => ({ t, p })
+          export const jsxs = (t, p) => ({ t, p })
+          export const Fragment = 'frag'
+          EOF
+          echo '{"name":"react","type":"module","main":"index.js","exports":{".":"./index.js","./jsx-runtime":"./jsx-runtime.js"}}' > stub/node_modules/react/package.json
+          cp desktop/plugin.js stub/plugin.mjs
+          cd stub
+          node --input-type=module -e "
+          import('./plugin.mjs')
+            .then(m => {
+              const keys = Object.keys(m.default || {})
+              if (!keys.includes('id') || !keys.includes('register')) {
+                console.error('FAIL: unexpected default export shape: ' + JSON.stringify(keys))
+                process.exit(1)
+              }
+              console.log('IMPORT OK ->', keys)
+            })
+            .catch(e => { console.error('FAILED:', e.name, e.message); process.exit(1) })
+          "

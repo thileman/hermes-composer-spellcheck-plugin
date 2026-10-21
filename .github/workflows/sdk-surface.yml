@@ -1,0 +1,51 @@
+name: SDK Surface
+
+# Enforces the Hermes Desktop Plugin SDK rules that `hermes plugins validate`
+# CANNOT catch, because its checks are literal-regex based:
+#
+#   - the "app DOM reach" rule forbids querying data-slot / data-tour /
+#     data-sidebar / data-testid FROM document. The scanner only sees the
+#     attribute inside a querySelector() call, so a selector hoisted into a
+#     const slips past it — which is exactly how this plugin once carried
+#     [data-slot="composer-rich-input"] while the scanner said "clean".
+#   - the "no bare globals" rule: a window/document listener or timer is not
+#     tracked by the host, so it survives disable and every hot reload.
+#   - the "never hardcode colors" rule.
+#   - the "only three import specifiers" rule.
+#
+# Each check here is a MEASUREMENT that can fail, so a green run means
+# something.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/plugin.js"
+      - "scripts/check-sdk-surface.cjs"
+      - ".github/workflows/sdk-surface.yml"
+  pull_request:
+    paths:
+      - "desktop/plugin.js"
+      - "scripts/check-sdk-surface.cjs"
+      - ".github/workflows/sdk-surface.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  surface:
+    name: SDK surface rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check the plugin against the SDK surface rules
+        run: node scripts/check-sdk-surface.cjs desktop/plugin.js

@@ -1,0 +1,85 @@
+name: Plugin Validate
+
+# The admission gate the catalog runs: `hermes plugins validate` from the
+# CURRENT hermes-agent main branch, not from a pinned local copy.
+#
+# Why current-main and not a pin: the desktop-surface and security-scan rules
+# change as Hermes changes, and a plugin that passes a stale scanner can still
+# be rejected by the one that runs at review time. Running the live scanner
+# here is what catches that BEFORE the catalog PR.
+#
+# The action is Hermes' own composite action, so the toolchain it builds is
+# the same one the catalog CI builds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/plugin.js"
+      - "plugin.yaml"
+      - ".github/workflows/plugin-validate.yml"
+  pull_request:
+    paths:
+      - "desktop/plugin.js"
+      - "plugin.yaml"
+      - ".github/workflows/plugin-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: hermes plugins validate (current main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Check out hermes-agent (current main)
+        uses: actions/checkout@v5
+        with:
+          repository: NousResearch/hermes-agent
+          ref: main
+          path: .hermes-validator
+          persist-credentials: false
+
+      - name: Build the validator runtime
+        working-directory: .hermes-validator
+        run: |
+          set -euo pipefail
+          python3 -S .hermes-validator/scripts/ci/setup_toolchain.py prepare \
+            --toolchain python --home .hermes-validator/.build/pm
+
+      - name: Install the locked Python toolchain
+        working-directory: .hermes-validator
+        run: |
+          set -euo pipefail
+          python3 -S .hermes-validator/scripts/ci/setup_toolchain.py install \
+            --toolchain python --home .hermes-validator/.build/pm
+
+      - name: Build the isolated validator environment
+        id: runtime
+        working-directory: .hermes-validator
+        env:
+          _SOURCE: ${{ github.workspace }}/.hermes-validator
+        run: |
+          set -euo pipefail
+          "$HERMES_PYTHON" - <<'PY'
+          import os
+          from pathlib import Path
+          from pm import build_environment
+          source = Path(os.environ["_SOURCE"])
+          python = build_environment(source=source, out=source / ".build/validator", explicit=True)
+          with open(os.path.join(os.environ["GITHUB_OUTPUT"], "a"), encoding="utf-8") as out:
+              out.write(f"python={python}\n")
+          PY
+
+      - name: Run hermes plugins validate
+        env:
+          _VALIDATOR_PYTHON: ${{ steps.runtime.outputs.python }}
+        run: |
+          set -euo pipefail
+          "$_VALIDATOR_PYTHON" -I -m hermes_cli.main plugins validate "$GITHUB_WORKSPACE"

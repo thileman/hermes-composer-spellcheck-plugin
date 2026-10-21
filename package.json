@@ -1,0 +1,16 @@
+{
+  "name": "hermes-composer-spellcheck-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Spell check for the Hermes Desktop composer: squiggles, a right-click suggestion menu, and a Custom Words page.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node scripts/run-tests.cjs",
+    "check:surface": "node scripts/check-sdk-surface.cjs desktop/plugin.js",
+    "check:classes": "python3 scripts/check_plugin_classes.py desktop/plugin.js"
+  },
+  "devDependencies": {
+    "@babel/parser": "^7.25.0",
+    "jsdom": "^25.0.0"
+  }
+}
