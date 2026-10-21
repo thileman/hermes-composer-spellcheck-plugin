@@ -1,0 +1,19 @@
+# Normalize line endings in the repository. The plugin is loaded uncompiled by
+# the desktop app and by `node --check`; a CRLF/LF mix changes byte offsets
+# and makes diffs noisy for a file this size.
+
+* text=auto eol=lf
+
+# The plugin is plain ESM text.
+*.js text eol=lf
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+
+# The embedded dictionary is a template literal inside plugin.js; it must
+# stay LF so the line-based parsing in the plugin is stable.
+desktop/plugin.js text eol=lf
