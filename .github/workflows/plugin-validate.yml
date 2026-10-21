@@ -83,7 +83,9 @@ jobs:
           from pm import build_environment
           source = Path(os.environ["_SOURCE"])
           python = build_environment(source=source, out=source / ".build/validator", explicit=True)
-          with open(os.path.join(os.environ["GITHUB_OUTPUT"], "a"), encoding="utf-8") as output:
+          # GITHUB_OUTPUT is a FILE the runner appends step outputs to, not a
+          # directory — joining "/a" onto it is a NotADirectoryError.
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"python={python}\n")
           PY
 
