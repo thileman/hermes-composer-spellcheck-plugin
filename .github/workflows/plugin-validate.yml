@@ -62,11 +62,17 @@ jobs:
             --toolchain python --home "$_SOURCE/.build/pm"
 
       # The install step above exports HERMES_PYTHON to GITHUB_ENV, so the
-      # interpreter that has the `pm` module is the one that must build the
+      # interpreter that has the toolchain is the one that must build the
       # validator environment.
+      #
+      # `pm` is a package at the ROOT of the Hermes source tree, so the
+      # interpreter must be able to import it: python adds the working
+      # directory to sys.path when it reads a program from stdin, so this
+      # step runs with the Hermes source as its working directory.
       - name: Build the isolated validator runtime
         id: runtime
         shell: bash
+        working-directory: .hermes-validator
         env:
           _SOURCE: ${{ github.workspace }}/.hermes-validator
         run: |
