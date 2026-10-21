@@ -46,23 +46,27 @@ jobs:
           path: .hermes-validator
           persist-credentials: false
 
-      - name: Build the validator runtime
-        working-directory: .hermes-validator
+      # setup_toolchain.py resolves the Hermes source from its own location
+      # (Path(__file__).resolve().parents[2]), so it is called by ABSOLUTE path
+      # and the toolchain home is absolute too. A relative path resolves
+      # against the step's working directory instead, which is not the source.
+      - name: Prepare the locked Python toolchain
+        shell: bash
+        env:
+          _SOURCE: ${{ github.workspace }}/.hermes-validator
         run: |
           set -euo pipefail
-          python3 -S .hermes-validator/scripts/ci/setup_toolchain.py prepare \
-            --toolchain python --home .hermes-validator/.build/pm
+          python3 -S "$_SOURCE/scripts/ci/setup_toolchain.py" prepare \
+            --toolchain python --home "$_SOURCE/.build/pm"
+          python3 -S "$_SOURCE/scripts/ci/setup_toolchain.py" install \
+            --toolchain python --home "$_SOURCE/.build/pm"
 
-      - name: Install the locked Python toolchain
-        working-directory: .hermes-validator
-        run: |
-          set -euo pipefail
-          python3 -S .hermes-validator/scripts/ci/setup_toolchain.py install \
-            --toolchain python --home .hermes-validator/.build/pm
-
-      - name: Build the isolated validator environment
+      # The install step above exports HERMES_PYTHON to GITHUB_ENV, so the
+      # interpreter that has the `pm` module is the one that must build the
+      # validator environment.
+      - name: Build the isolated validator runtime
         id: runtime
-        working-directory: .hermes-validator
+        shell: bash
         env:
           _SOURCE: ${{ github.workspace }}/.hermes-validator
         run: |
@@ -73,11 +77,12 @@ jobs:
           from pm import build_environment
           source = Path(os.environ["_SOURCE"])
           python = build_environment(source=source, out=source / ".build/validator", explicit=True)
-          with open(os.path.join(os.environ["GITHUB_OUTPUT"], "a"), encoding="utf-8") as out:
-              out.write(f"python={python}\n")
+          with open(os.path.join(os.environ["GITHUB_OUTPUT"], "a"), encoding="utf-8") as output:
+              output.write(f"python={python}\n")
           PY
 
       - name: Run hermes plugins validate
+        shell: bash
         env:
           _VALIDATOR_PYTHON: ${{ steps.runtime.outputs.python }}
         run: |
