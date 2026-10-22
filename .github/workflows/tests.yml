@@ -6,23 +6,14 @@ name: Tests
 #
 # These exist because the failures they cover are all SILENT: a dead
 # Tailwind class renders invisible text, a jsx() call that passes children as
-# the third argument renders an empty element, and a code-span mask that
-# cannot be undone corrupts the user's draft. None of them raise.
+# the third argument renders an empty element, a code-span mask that
+# cannot be undone corrupts the user's draft, and a helper lost in an edit
+# throws only when the feature that calls it is used. None of them raise.
 
 on:
   push:
     branches: [main]
-    paths:
-      - "desktop/plugin.js"
-      - "tests/**"
-      - "scripts/**"
-      - ".github/workflows/tests.yml"
   pull_request:
-    paths:
-      - "desktop/plugin.js"
-      - "tests/**"
-      - "scripts/**"
-      - ".github/workflows/tests.yml"
   workflow_dispatch:
 
 permissions:

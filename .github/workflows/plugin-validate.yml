@@ -14,15 +14,7 @@ name: Plugin Validate
 on:
   push:
     branches: [main]
-    paths:
-      - "desktop/plugin.js"
-      - "plugin.yaml"
-      - ".github/workflows/plugin-validate.yml"
   pull_request:
-    paths:
-      - "desktop/plugin.js"
-      - "plugin.yaml"
-      - ".github/workflows/plugin-validate.yml"
   workflow_dispatch:
 
 permissions:

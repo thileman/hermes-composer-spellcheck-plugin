@@ -220,3 +220,5 @@ does.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- CI now runs on every push: the path filters skipped most commits. -->
