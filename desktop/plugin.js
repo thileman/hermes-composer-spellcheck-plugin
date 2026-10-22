@@ -50591,6 +50591,31 @@ function resolveLocale(raw) {
 // Recognition + ranking
 // ---------------------------------------------------------------------------
 
+/**
+ * Is this word one we should leave alone?
+ *
+ * The custom dictionary wins, then identifiers (CamelCase, snake_case,
+ * hyphenated) and anything containing a digit -- those are names and
+ * symbols, not prose. Everything else is judged by the dictionary.
+ */
+function isKnown(entry, word, locale) {
+  if (allowed.get(locale)?.has(word.toLowerCase())) {
+    return true;
+  }
+
+  // CamelCase and snake_case tokens are identifiers, not prose.
+  if (/[A-Z]/.test(word.slice(1)) || word.includes('_') || word.includes('-')) {
+    return true;
+  }
+
+  // Anything with a digit is not a spelling error.
+  if (/\d/.test(word)) {
+    return true;
+  }
+
+  return lookup(entry, word);
+}
+
 /** Case/accent-tolerant lookup: try exact, then lower, then the base word. */
 function lookup(entry, word) {
   // The word set holds a MASK of the legal capitalisations, so a word is
