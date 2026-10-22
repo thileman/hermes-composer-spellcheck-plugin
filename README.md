@@ -26,8 +26,10 @@ cannot provide: a working suggestion menu.
 - **Optionally ignores code spans** — `` `backtick` `` runs, file names and
   paths are not underlined.
 - **Settings** live under **Settings → Plugins → Composer Spell Check**, and
-  the word list is on its own page at `/spellcheck-dictionary` (sidebar:
-  **Spellcheck**).
+  the word list is on its own page at `/spellcheck-dictionary`. A
+  **Show in the sidebar** switch controls whether a **Spellcheck** row
+  appears in the sidebar; the page stays reachable from the settings either
+  way, so turning the row off never hides the feature.
 
 ## Install
 
@@ -39,6 +41,31 @@ $HERMES_HOME/desktop-plugins/hermes-composer-spellcheck-plugin/plugin.js
 
 Then press `⌘K` → **Reload desktop plugins**. The plugin appears in
 **Capabilities → Plugins**, where you can turn it off.
+
+## Using it
+
+**Suggest a correction.** Right-click a word with a squiggle under it. The
+suggestions appear at the top of the menu; click one to replace the word.
+Arrow keys work.
+
+**Add a word for good.** Right-click the word → **Add to dictionary**. The
+squiggle goes away immediately and the word is saved.
+
+**Manage your words.** Open **Settings → Plugins → Composer Spell Check →
+Custom Words**, or click **Spellcheck** in the sidebar if you left that row
+showing. There you can search your words, add more (one at a time, or several
+comma-separated), and delete any you have added by mistake. The search
+filters as you type: `o` narrows to every word starting with *o*, `op`
+narrows further, and so on.
+
+**Settings.**
+
+| setting | what it does |
+|---|---|
+| Check spelling | turns the squiggles on and off |
+| Language | which dictionary to use — *Automatic* follows the app's language |
+| Ignore code spans | leaves `` `code` ``, file names and paths unflagged |
+| Show in the sidebar | shows a **Spellcheck** row in the sidebar. The Custom Words page is always available from the settings, whether the row is shown or not. |
 
 ## How it works, and why it looks the way it does
 
@@ -116,6 +143,7 @@ raise an error.
 | `tests/mask-code-spans.test.cjs` | code spans are masked and unmasked, the text round-trips byte-for-byte, and the caret survives the DOM surgery |
 | `tests/pattern.test.cjs` | `src/app.ts` matches; `e.g.`, `i.e.`, `etc.` and `a.b.c` do not |
 | `tests/selectors.test.cjs` | the composer is found by role, not by the app's private slot names |
+| `tests/sidebar-toggle.test.cjs` | flipping the *Show in the sidebar* switch removes the row and leaves the page reachable — driven through the real settings switch |
 
 ### Checks
 
