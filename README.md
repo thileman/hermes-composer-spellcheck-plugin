@@ -21,6 +21,12 @@ cannot provide: a working suggestion menu.
   word data Firefox and LibreOffice ship), embedded and affix-expanded at
   load into ~118k real word forms. Ranking is Damerau-Levenshtein distance,
   tie-broken by a bundled corpus frequency list.
+- **Keeps the dictionary's capitalisation.** The corpus distinguishes
+  `Hermes` from `hermes` and `Monday` from `monday`, and so does this
+  plugin: a lowercase proper noun is flagged, and the suggestion offered is
+  the capitalised form Chromium accepts — right-click `english` and
+  **English** is the first row. Suggesting the lowercase spelling would
+  leave the word underlined after you accepted it.
 - **Custom words.** Add a word from the right-click menu or from the
   **Custom Words** page; it stops being flagged immediately.
 - **Optionally ignores code spans** — `` `backtick` `` runs, file names and
@@ -116,6 +122,7 @@ plugin.yaml                the manifest
 scripts/run-tests.cjs      runs every suite
 scripts/check-sdk-surface.cjs   the SDK surface rules
 scripts/check_plugin_classes.py checks every CSS class against the app
+scripts/strip-literals.cjs  blanks comments and literals for the symbol scan
 tests/                     the test suites
 ```
 
@@ -133,9 +140,10 @@ Every suite reads the real `desktop/plugin.js` and exercises the real
 functions out of it — nothing is re-implemented, so a test cannot pass while
 the shipped code is broken. They exist because the failures they cover are
 all *silent*: a dead Tailwind class renders invisible text, a `jsx()` call
-that passes children as the third argument renders an empty element, and a
-code-span mask that cannot be undone corrupts the user's draft. None of them
-raise an error.
+that passes children as the third argument renders an empty element, a
+code-span mask that cannot be undone corrupts the user's draft, and a helper
+that was lost in an edit throws only when the feature that calls it is used.
+None of them raise an error at build time.
 
 | suite | what it proves |
 |---|---|
@@ -146,6 +154,9 @@ raise an error.
 | `tests/sidebar-toggle.test.cjs` | flipping the *Show in the sidebar* switch removes the row and leaves the page reachable — driven through the real settings switch |
 | `tests/settings-custom-words-link.test.cjs` | the *Custom Words* link targets the settings sub-page, not the top-level route that closes Settings |
 | `tests/settings-render.test.cjs` | the settings page renders in a real React DOM, so a row React refuses to render fails the build |
+| `tests/dictionary-case.test.cjs` | the dictionary keeps its capitalisation: `Hermes` is a word, `hermes` is not, and a typo offers the spelling the dictionary actually holds |
+| `tests/menu-case.test.cjs` | the whole right-click path — rank, inject, click — and clicking the row hands back the capitalised word |
+| `tests/defined-symbols.test.cjs` | no function that existed in the first commit is called without being defined (three helpers were lost this way) |
 
 ### Checks
 
