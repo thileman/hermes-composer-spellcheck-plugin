@@ -1,7 +1,7 @@
 name: hermes-composer-spellcheck-plugin
 version: 1.0.0
 description: "Spell check for the Hermes Desktop composer. Restores the squiggles the app opts out of, adds a right-click suggestion menu ranked with Damerau-Levenshtein over the standard SCOWL/Hunspell English dictionary, and adds a Custom Words page for the words you add."
-author: NousResearch
+author: thileman
 license: MIT
 kind: standalone
 platforms:
