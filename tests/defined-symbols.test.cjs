@@ -37,6 +37,7 @@ function originalSource() {
       cwd: ROOT,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
     })
   } catch {
     return null
@@ -135,6 +136,7 @@ const original = originalSource()
 
 if (!original) {
   console.log('  SKIP  could not read ' + BASE_COMMIT + ' (shallow clone?) -- definitions check needs history')
+  console.log('        run with `git fetch --unshallow` to enable it')
 } else {
   const nowDefs = definitions(source)
   const origDefs = definitions(original)
