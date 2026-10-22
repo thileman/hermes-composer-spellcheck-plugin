@@ -50614,23 +50614,12 @@ function lookup(entry, word) {
 }
 
 /**
- * Is this exact spelling legal for this word?
+ * Is this spelling legal for a word with this mask?
  *
  * A lowercase dictionary word is legal in any case; a proper noun is legal
- * only capitalised; an acronym only in caps; a brand spelling only as
- * written.
+ * only capitalised; an acronym only in caps.
  */
-function isSpelled(entry, word) {
-  if (entry.mixed.has(word)) {
-    return true;
-  }
-
-  const mask = entry.words.get(word.toLowerCase());
-
-  if (!mask) {
-    return false;
-  }
-
+function maskAllows(mask, word) {
   if (word === word.toLowerCase()) {
     return (mask & SPELL_LOWER) !== 0;
   }
@@ -50645,6 +50634,23 @@ function isSpelled(entry, word) {
   }
 
   return false;
+}
+
+/**
+ * Is this exact spelling legal for this word?
+ *
+ * A lowercase dictionary word is legal in any case; a proper noun is legal
+ * only capitalised; an acronym only in caps; a brand spelling only as
+ * written.
+ */
+function isSpelled(entry, word) {
+  if (entry.mixed.has(word)) {
+    return true;
+  }
+
+  const mask = entry.words.get(word.toLowerCase());
+
+  return mask ? maskAllows(mask, word) : false;
 }
 /**
  * Damerau-Levenshtein with THREE rows. The transposition rule reads row i-2 at
@@ -50710,7 +50716,24 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
   // form: the distance is measured case-insensitively, but the suggestion
   // that comes out carries the dictionary's own capitalisation.
   for (const [candidate, canonical] of entry.cands) {
-    if (candidate === target || Math.abs(candidate.length - target.length) > cap) {
+    if (Math.abs(candidate.length - target.length) > cap) {
+      continue;
+    }
+
+    // Skip a candidate only when the word the user TYPED is already a legal
+    // spelling of THIS word -- there is nothing to correct. BOTH halves
+    // matter:
+    //
+    //   the target must BE this word (ignoring case), and
+    //   the target's spelling must be legal for it.
+    //
+    // The first half alone drops "English" for the input "english" -- the
+    // two share a lowercase key -- and the second half alone drops
+    // "spelling" for the typo "speling", because "spelling" allows
+    // lowercase. Together they keep exactly the case corrections.
+    const mask = entry.words.get(candidate);
+
+    if (candidate === target && mask && maskAllows(mask, word)) {
       continue;
     }
 
@@ -50765,6 +50788,74 @@ let injected = null;
 function clearInjected() {
   injected?.remove();
   injected = null;
+}
+
+/**
+ * The word under the caret, and a range covering it.
+ *
+ * The composer's text lives in a text node inside a contenteditable, so the
+ * selection's start container is that node and the offsets index into its
+ * value. A collapsed caret sits on a BOUNDARY between two words, so the
+ * probe steps to the nearest word character first -- otherwise the word
+ * found depends on which side of the gap the caret happened to land.
+ */
+function wordAtCaret() {
+  const sel = document.getSelection();
+
+  if (!sel || !sel.rangeCount) {
+    return null;
+  }
+
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+
+  if (node.nodeType !== Node.TEXT_NODE) {
+    return null;
+  }
+
+  const text = node.nodeValue || '';
+  const isWord = (ch) => /[\p{L}'\u2019-]/u.test(ch);
+  let start = range.startOffset;
+  let end = start;
+
+  // A collapsed caret sits on a boundary; step to the nearest word character.
+  if (!isWord(text[start] || '')) {
+    let probe = start;
+
+    while (probe > 0 && !isWord(text[probe - 1])) {
+      probe--;
+    }
+
+    if (probe === start) {
+      while (probe < text.length && !isWord(text[probe])) {
+        probe++;
+      }
+    }
+
+    start = probe;
+    end = probe;
+  }
+
+  while (start > 0 && isWord(text[start - 1])) {
+    start--;
+  }
+
+  while (end < text.length && isWord(text[end])) {
+    end++;
+  }
+
+  const word = text.slice(start, end);
+
+  if (!word || word.length < 2) {
+    return null;
+  }
+
+  const out = range.cloneRange();
+
+  out.setStart(node, start);
+  out.setEnd(node, end);
+
+  return { word, range: out };
 }
 
 /**
