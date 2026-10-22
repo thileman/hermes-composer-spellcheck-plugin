@@ -36,6 +36,7 @@ import {
   EmptyState,
   host,
   ListRow,
+  pluginSettingsHref,
   ROUTES_AREA,
   SearchField,
   SIDEBAR_NAV_AREA,
@@ -52567,6 +52568,18 @@ export default {
 
     syncNavRow();
 
+    // Deep-link the Custom Words SUB-PAGE from inside the plugin's own
+    // settings page. The rail already lists it under this plugin, so the
+    // target is the same route the rail navigates to: Settings stays open and
+    // the content pane swaps to the word list, instead of the whole overlay
+    // closing on a route change.
+    //
+    // ID is this module's own exported id — the same string the host registers
+    // the page under, and the same one the settings rail links to.
+    const openCustomWords = () => {
+      host.navigate(pluginSettingsHref(ID, 'words'));
+    };
+
     ctx.registerSettingsPage?.({
       id: 'settings',
       title: 'Composer Spell Check',
@@ -52664,21 +52677,26 @@ export default {
               key: 'navrow',
               title: 'Show in the sidebar'
             }),
-            // The page itself, reachable from the settings whatever the
-            // sidebar row is doing. The sub-page under this one is the same
-            // view; this button is the direct way in.
-            jsx('div', {
-              className: 'flex items-center gap-2 px-3 py-2',
+            // The word list is a page of its own, and it is reachable from
+            // HERE without leaving Settings: the row below deep-links the
+            // sub-page the rail already lists, so the pane swaps in place
+            // instead of the whole Settings overlay closing.
+            jsx(ListRow, {
+              action: jsx(Codicon, {
+                className: 'text-(--ui-text-tertiary)',
+                name: 'chevron-right',
+                size: '0.8rem'
+              }),
+              description: 'Search, add and remove the words the spell checker always accepts.',
               key: 'open',
-              children: [
-                jsx(Button, {
-                  key: 'b',
-                  onClick: () => host.navigate('/spellcheck-dictionary'),
-                  size: 'sm',
-                  variant: 'secondary',
-                  children: 'Open Custom Words'
-                })
-              ]
+              title: 'Custom Words',
+              below: jsx('button', {
+                className: 'mt-1 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary) underline underline-offset-2 hover:text-foreground',
+                key: 'open-link',
+                onClick: openCustomWords,
+                type: 'button',
+                children: 'Open Custom Words'
+              })
             })] }
           );
         }
