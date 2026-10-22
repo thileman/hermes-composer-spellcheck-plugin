@@ -70,7 +70,14 @@ const EDITOR_SELECTOR = '[role="textbox"][contenteditable="true"], [role="textbo
 const QUICK_ENTRY_SELECTOR = 'input[type="text"], input:not([type]), input[type="search"], input[type="email"], input[type="url"]';
 const SELECTOR = `${EDITOR_SELECTOR}, ${QUICK_ENTRY_SELECTOR}`;
 
-const DEFAULTS = { enabled: true, language: 'auto', excludeCodeSpans: false };
+const DEFAULTS = {
+  enabled: true,
+  language: 'auto',
+  excludeCodeSpans: false,
+  // Whether the sidebar shows a Spellcheck row. The Custom Words PAGE is
+  // always reachable from Settings -> Plugins whether this is on or off.
+  showSidebarTab: true
+};
 
 /** Canonical Hunspell source. `en` is embedded; the rest are fetched. */
 const DICT_BASE = 'https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries';
@@ -52528,16 +52535,37 @@ export default {
       render: () => jsx(DictionaryPage, { prefs, storage: ctx.storage })
     });
 
-    ctx.register({
-      id: 'dictionary-nav',
-      area: SIDEBAR_NAV_AREA,
-      order: 90,
-      data: {
-        codicon: 'book',
-        label: 'Spellcheck',
-        path: '/spellcheck-dictionary'
+    // The sidebar row is OPTIONAL. The Custom Words page is always reachable
+    // from Settings -> Plugins, so hiding the row never hides the feature.
+    //
+    // The row is registered and unregistered as the toggle flips, rather than
+    // gated on a `when()` predicate: the contribution registry CACHES the
+    // resolved list for an area and only invalidates it on a registry
+    // mutation, so a pref-driven `when()` would not re-resolve when the user
+    // flips the switch.
+    let removeNavRow = null;
+
+    const syncNavRow = () => {
+      const wanted = prefs.get().showSidebarTab !== false;
+
+      if (wanted && !removeNavRow) {
+        removeNavRow = ctx.register({
+          id: 'dictionary-nav',
+          area: SIDEBAR_NAV_AREA,
+          order: 90,
+          data: {
+            codicon: 'book',
+            label: 'Spellcheck',
+            path: '/spellcheck-dictionary'
+          }
+        });
+      } else if (!wanted && removeNavRow) {
+        removeNavRow();
+        removeNavRow = null;
       }
-    });
+    };
+
+    syncNavRow();
 
     ctx.registerSettingsPage?.({
       id: 'settings',
@@ -52578,6 +52606,13 @@ export default {
               ready = null;
               void ensureReady();
             }
+
+            // The sidebar row follows the toggle. The registry caches the
+            // resolved area list, so the row is re-registered rather than
+            // gated on a when() predicate.
+            if (patch.showSidebarTab !== undefined) {
+              syncNavRow();
+            }
           };
 
           const locales = ['auto', 'en', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'ru',
@@ -52616,6 +52651,34 @@ export default {
               description: 'Do not underline `backtick` code spans, file names or paths.',
               key: 'code',
               title: 'Ignore code spans'
+            }),
+            jsx(ListRow, {
+              action: jsx(Switch, {
+                checked: p.showSidebarTab !== false,
+                key: 'nav',
+                label: '',
+                onCheckedChange: (value) => set({ showSidebarTab: value })
+              }),
+              description:
+              'Show a Spellcheck row in the sidebar. The Custom Words page is always available from this page, whether the row is shown or not.',
+              key: 'navrow',
+              title: 'Show in the sidebar'
+            }),
+            // The page itself, reachable from the settings whatever the
+            // sidebar row is doing. The sub-page under this one is the same
+            // view; this button is the direct way in.
+            jsx('div', {
+              className: 'flex items-center gap-2 px-3 py-2',
+              key: 'open',
+              children: [
+                jsx(Button, {
+                  key: 'b',
+                  onClick: () => host.navigate('/spellcheck-dictionary'),
+                  size: 'sm',
+                  variant: 'secondary',
+                  children: 'Open Custom Words'
+                })
+              ]
             })] }
           );
         }
