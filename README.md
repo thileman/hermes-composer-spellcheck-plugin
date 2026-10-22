@@ -144,6 +144,8 @@ raise an error.
 | `tests/pattern.test.cjs` | `src/app.ts` matches; `e.g.`, `i.e.`, `etc.` and `a.b.c` do not |
 | `tests/selectors.test.cjs` | the composer is found by role, not by the app's private slot names |
 | `tests/sidebar-toggle.test.cjs` | flipping the *Show in the sidebar* switch removes the row and leaves the page reachable — driven through the real settings switch |
+| `tests/settings-custom-words-link.test.cjs` | the *Custom Words* link targets the settings sub-page, not the top-level route that closes Settings |
+| `tests/settings-render.test.cjs` | the settings page renders in a real React DOM, so a row React refuses to render fails the build |
 
 ### Checks
 
