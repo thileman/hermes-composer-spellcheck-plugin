@@ -52678,25 +52678,42 @@ export default {
               title: 'Show in the sidebar'
             }),
             // The word list is a page of its own, and it is reachable from
-            // HERE without leaving Settings: the row below deep-links the
-            // sub-page the rail already lists, so the pane swaps in place
-            // instead of the whole Settings overlay closing.
-            jsx(ListRow, {
-              action: jsx(Codicon, {
-                className: 'text-(--ui-text-tertiary)',
-                name: 'chevron-right',
-                size: '0.8rem'
-              }),
-              description: 'Search, add and remove the words the spell checker always accepts.',
+            // HERE without leaving Settings: this row deep-links the sub-page
+            // the rail already lists, so the pane swaps in place instead of
+            // the whole Settings overlay closing.
+            //
+            // The WHOLE row is the button — the app's own settings nav rows
+            // are one click target, title and chevron together, with no
+            // second "open" link to discover.
+            jsx('button', {
+              className: 'flex w-full min-h-11 cursor-pointer items-center gap-3 rounded-md border border-(--ui-stroke-tertiary) px-3 py-3 text-left transition-colors hover:bg-(--chrome-action-hover)',
               key: 'open',
-              title: 'Custom Words',
-              below: jsx('button', {
-                className: 'mt-1 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary) underline underline-offset-2 hover:text-foreground',
-                key: 'open-link',
-                onClick: openCustomWords,
-                type: 'button',
-                children: 'Open Custom Words'
-              })
+              onClick: openCustomWords,
+              type: 'button',
+              children: [
+                jsx('span', {
+                  className: 'min-w-0 flex-1',
+                  key: 'text',
+                  children: [
+                    jsx('span', {
+                      className: 'block truncate text-[length:var(--conversation-text-font-size)] font-medium text-foreground',
+                      key: 'title',
+                      children: 'Custom Words'
+                    }),
+                    jsx('span', {
+                      className: 'mt-1 block text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)',
+                      key: 'desc',
+                      children: 'Search, add and remove the words the spell checker always accepts.'
+                    })
+                  ]
+                }),
+                jsx(Codicon, {
+                  className: 'shrink-0 text-(--ui-text-tertiary)',
+                  key: 'chevron',
+                  name: 'chevron-right',
+                  size: '0.8rem'
+                })
+              ]
             })] }
           );
         }

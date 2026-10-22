@@ -134,7 +134,6 @@ const ctx = {
 plugin.register(ctx)
 
 const page = registered.find(c => c.area === 'settings.plugins')._page
-const html = ReactDOMServer.renderToStaticMarkup(React.createElement(page.render))
 
 let failures = 0
 function check(label, actual, expected) {
@@ -148,26 +147,27 @@ function has(label, needle, haystack = html) {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label} (looking for ${JSON.stringify(needle)})`)
 }
 
+const html = ReactDOMServer.renderToStaticMarkup(React.createElement(page.render))
+
 console.log('=== the settings page renders ===')
 check('it produced HTML', html.length > 0, true)
 has('the Check spelling row is there', 'Check spelling')
 has('the Show in the sidebar toggle is there', 'Show in the sidebar')
 
-console.log('\n=== the Custom Words row renders as a row ===')
-has('it is a ListRow', 'data-listrow="1"')
-has('its title is Custom Words', 'data-row-title="1">Custom Words<')
-has('it has a description', 'data-row-desc="1"')
-has('it has the chevron action', 'data-row-action="1"')
+console.log('\n=== the Custom Words row renders as one click target ===')
+has('its title is Custom Words', '>Custom Words<')
+has('it has a description', 'Search, add and remove the words the spell checker always accepts.')
 has('the chevron is the codicon', 'codicon-chevron-right')
+// The link text must be GONE from the page entirely.
+check('there is NO separate Open Custom Words link', html.includes('Open Custom Words'), false)
 
-console.log('\n=== the link inside it navigates to the settings sub-page ===')
-has('the row has the link', 'data-row-below="1"')
-has('the link says Open Custom Words', 'Open Custom Words')
-has('the link is a button', '<button')
-
-// Pull the href/onClick out of the rendered HTML and fire it.
-const linkMatch = html.match(/<button[^>]*>Open Custom Words<\/button>/)
-check('the link rendered with its handler', !!linkMatch, true)
+// The whole row must be the button: one <button> whose text is the title.
+const buttons = html.match(/<button[\s\S]*?<\/button>/g) || []
+const rowButton = buttons.find(b => b.includes('Custom Words'))
+check('the row is a button', !!rowButton, true)
+check('the button carries the title', !!rowButton && rowButton.includes('>Custom Words<'), true)
+check('the button carries the description', !!rowButton && rowButton.includes('Search, add and remove'), true)
+check('the button carries the chevron', !!rowButton && rowButton.includes('codicon-chevron-right'), true)
 
 console.log('\n=== the plugin page itself is untouched ===')
 const sub = page.children[0]

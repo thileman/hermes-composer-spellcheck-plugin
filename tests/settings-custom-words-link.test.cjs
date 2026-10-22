@@ -204,33 +204,34 @@ const page = settingsPages()[0]._page
 check('the sub-page is the words page', page.children[0].id, 'words')
 check('the sub-page is titled Custom Words', page.children[0].title, 'Custom Words')
 
-console.log('\n=== 2. the settings page has a Custom Words link row ===')
+console.log('\n=== 2. the settings page has a Custom Words row ===')
 // Walk the rendered tree for the row and its clickable target.
-function findByTitle(node, title) {
+function findByText(node, text) {
   if (!node || typeof node !== 'object') return null
-  if (node.p && node.p.title === title) return node
   const children = node.p && node.p.children
   const list = Array.isArray(children) ? children : children ? [children] : []
+  // A button whose text contains the label is the row.
+  if (node.t === 'button') {
+    const flat = JSON.stringify(node.p)
+    if (flat.includes(text)) return node
+  }
   for (const c of list) {
-    const hit = findByTitle(c, title)
+    const hit = findByText(c, text)
     if (hit) return hit
   }
   return null
 }
 
 const pageElement = page.render().t()
-const wordsRow = findByTitle(pageElement, 'Custom Words')
+const wordsRow = findByText(pageElement, 'Custom Words')
 check('the Custom Words row exists', !!wordsRow, true)
-check('it is a ListRow', wordsRow && wordsRow.t, 'ListRow')
-check('it has a chevron affordance', !!(wordsRow && wordsRow.p.action), true)
+check('the WHOLE row is the button', wordsRow && wordsRow.t, 'button')
+check('it has a chevron affordance', JSON.stringify(wordsRow.p).includes('chevron-right'), true)
+check('there is no separate Open Custom Words link', JSON.stringify(pageElement).includes('Open Custom Words'), false)
 
 console.log('\n=== 3. clicking it navigates to the SETTINGS sub-page ===')
-// The clickable target is the row's `below` link.
-const link = wordsRow && wordsRow.p.below
-check('the row has a link', !!link, true)
-
 navigations.length = 0
-if (link) link.p.onClick()
+if (wordsRow) wordsRow.p.onClick()
 
 check('exactly one navigation', navigations.length, 1)
 const target = navigations[0] || ''
