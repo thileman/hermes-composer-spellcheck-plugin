@@ -19,9 +19,38 @@ const source = fs.readFileSync(PLUGIN, 'utf8')
 
 // React from the app checkout, so the render uses the same React the app does.
 // The desktop app's deps live in the hermes-agent repo root, not in apps/desktop.
-const REPO = path.resolve(APP, '..', '..')
-const React = require(path.join(REPO, 'node_modules', 'react'))
-const ReactDOMServer = require(path.join(REPO, 'node_modules', 'react-dom', 'server'))
+// HERMES_APP points at that checkout; in CI the workflow installs react +
+// react-dom into this repo's own node_modules, so fall back to that.
+function loadReact() {
+  const candidates = [
+    path.join(path.resolve(APP, '..', '..'), 'node_modules'),
+    path.join(__dirname, '..', 'node_modules'),
+    path.join(__dirname, '..', '..', 'node_modules')
+  ]
+
+  for (const base of candidates) {
+    try {
+      return {
+        React: require(path.join(base, 'react')),
+        ReactDOMServer: require(path.join(base, 'react-dom', 'server'))
+      }
+    } catch {
+      // try the next candidate
+    }
+  }
+
+  return null
+}
+
+const loaded = loadReact()
+
+if (!loaded) {
+  console.log('SKIP — react/react-dom are not available here.')
+  console.log('       (the render suite needs the app checkout or `npm i react react-dom`)')
+  process.exit(0)
+}
+
+const { React, ReactDOMServer } = loaded
 
 // --- stubs for the modules the plugin imports ------------------------------
 // ListRow / Codicon are stubbed with the REAL app implementations' shape:

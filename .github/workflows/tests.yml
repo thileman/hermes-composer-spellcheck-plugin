@@ -42,8 +42,10 @@ jobs:
         with:
           node-version: "22"
 
+      # react + react-dom back the settings-render suite, which renders the
+      # plugin's settings page in a real React DOM and asserts on the HTML.
       - name: Install test dependencies
-        run: npm install --no-save --no-package-lock jsdom @babel/parser
+        run: npm install --no-save --no-package-lock jsdom @babel/parser react@19 react-dom@19
 
       - name: Run the test suites
         run: node scripts/run-tests.cjs
@@ -91,6 +93,12 @@ jobs:
           export const ToggleRow = noop
           export const SearchField = noop
           export const host = { notify: noop }
+          export const pluginSettingsHref = (plugin, page) => {
+            const params = new URLSearchParams({ tab: 'plugins' })
+            params.set('plugin', plugin)
+            if (page) params.set('ppage', page)
+            return `/settings?${params}`
+          }
           export const useValue = (a) => a.get()
           export const ROUTES_AREA = 'routes'
           export const SIDEBAR_NAV_AREA = 'sidebar-nav'
