@@ -51038,7 +51038,18 @@ function noticeMenuSeamMissing() {
  * yet (dictionary still loading): the app's menu then shows unchanged.
  */
 function suggestionItems(word, locale, storage) {
-  const entry = rankFor(locale);
+  // A locale whose dictionary never loaded — offline, a 404, a proxy that
+  // eats raw.githubusercontent.com — falls back to the EMBEDDED English list.
+  // That is the degradation the README promises ("suggestions are still
+  // offered and applied, ranked in English"); without it rankFor(locale) is
+  // simply not ready, this function returns [] and every non-English user
+  // gets a silently empty right-click menu. The custom words isKnown()
+  // consults stay the ones for THIS locale, never the fallback's.
+  let entry = rankFor(locale);
+
+  if (!entry.ready && locale !== 'en' && rankFor('en').ready) {
+    entry = rankFor('en');
+  }
 
   if (!word || !entry.ready || isKnown(entry, word, locale)) {
     return [];
