@@ -76,6 +76,14 @@ const ID = 'hermes-composer-spellcheck-plugin';
 const EDITOR_SELECTOR = '[role="textbox"][contenteditable="true"], [role="textbox"][contenteditable=""], [role="textbox"][contenteditable="plaintext-only"]';
 const SELECTOR = EDITOR_SELECTOR;
 
+/**
+ * This plugin's OWN marker around a masked code span.
+ *
+ * Written by maskCodeSpans and by nothing else in the app, so matching it is
+ * not app-DOM reach: it is the plugin reading back the wrapper it created.
+ */
+const MASKED_CODE_SELECTOR = 'code[data-sp-mask]';
+
 const DEFAULTS = {
   enabled: true,
   language: 'auto',
@@ -50906,6 +50914,59 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
 const SUGGESTION_ROWS = 5;
 
 /**
+ * Is the caret sitting inside one of this plugin's masked code spans?
+ *
+ * The plugin used to answer this from the pointer event itself:
+ * `target.closest('code')` in its own `onContextMenu`. The SDK's
+ * `ComposerContextMenuContext` is frozen to `{ selection, word }` — no
+ * element, no Range, no caret — so the same question goes to the document's
+ * selection instead. At right-click time the caret is still where the user
+ * clicked: the app reads the word under it (and, on some builds, expands the
+ * range to that word) before it calls `items()`.
+ *
+ * Only the plugin's OWN wrapper is consulted — `MASKED_CODE_SELECTOR`, which
+ * nothing but `maskCodeSpans` writes — and the hit must be inside the
+ * composer, so a selection parked on the Custom Words page can never hide
+ * the menu's rows.
+ *
+ * EVERY "cannot tell" answers FALSE, deliberately. Missing `document` (SSR, a
+ * bare test sandbox), no selection, a selection with no range, an anchor that
+ * is not an element, or a masked span outside the composer all fall through
+ * to "not code", and the rows are offered. Suggesting a spelling for a code
+ * span is a small annoyance; swallowing the suggestions in ordinary prose is
+ * the bug this plugin exists to fix.
+ */
+function caretInMaskedCode() {
+  try {
+    if (typeof document === 'undefined' || typeof document.getSelection !== 'function') {
+      return false;
+    }
+
+    const selection = document.getSelection();
+
+    if (!selection || !selection.rangeCount) {
+      return false;
+    }
+
+    // The anchor is the start of the selection; for the collapsed caret a
+    // right-click leaves behind it is also the focus.
+    const node = selection.anchorNode || selection.focusNode;
+
+    if (!node) {
+      return false;
+    }
+
+    const el = node.nodeType === 3 ? node.parentElement : node;
+    const masked = el && typeof el.closest === 'function' ? el.closest(MASKED_CODE_SELECTOR) : null;
+
+    return Boolean(masked && masked.closest(EDITOR_SELECTOR));
+  } catch {
+    // A selection API that throws is not evidence of a code span.
+    return false;
+  }
+}
+
+/**
  * The rows this plugin contributes for the right-clicked word.
  *
  * `[]` for a word that is spelled correctly, or one the plugin cannot judge
@@ -50915,6 +50976,15 @@ function suggestionItems(word, locale, storage) {
   const entry = rankFor(locale);
 
   if (!word || !entry.ready || isKnown(entry, word, locale)) {
+    return [];
+  }
+
+  // A masked code span is not prose. Right-clicking `foo` inside `foo.ts`
+  // used to offer spellings for "foo" once the masking became invisible to
+  // the menu; the old DOM handler suppressed it with `target.closest('code')`
+  // and this restores that, reading the caret rather than the pointer. The
+  // app's menu is left exactly as it is.
+  if (caretInMaskedCode()) {
     return [];
   }
 
@@ -51663,7 +51733,7 @@ function maskCodeSpans(enable) {
         ? characterOffset(el, selection.getRangeAt(0).startContainer, selection.getRangeAt(0).startOffset)
         : null;
 
-      for (const code of Array.from(el.querySelectorAll('code[data-sp-mask]'))) {
+      for (const code of Array.from(el.querySelectorAll(MASKED_CODE_SELECTOR))) {
         const text = document.createTextNode(code.textContent || '');
 
         code.parentNode?.replaceChild(text, code);
@@ -51682,7 +51752,7 @@ function maskCodeSpans(enable) {
 
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       // Skip text already inside one of our wrappers.
-      if (node.parentElement?.closest('code[data-sp-mask]')) {
+      if (node.parentElement?.closest(MASKED_CODE_SELECTOR)) {
         continue;
       }
 

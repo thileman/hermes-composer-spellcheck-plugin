@@ -55,7 +55,9 @@ Then press `⌘K` → **Reload desktop plugins**. The plugin appears in
 
 **Suggest a correction.** Right-click a word with a squiggle under it. The
 suggestions appear in their own section of the menu; click one to replace the
-word.
+word. They are offered for prose only: with **Ignore code spans** on, a
+right-click inside a masked code span contributes no rows, so the menu is left
+exactly as the app drew it.
 
 **Add a word for good.** Right-click the word → **Add to dictionary**. The
 squiggle goes away immediately and the word is saved.
@@ -108,7 +110,10 @@ data or asks for an effect; the app performs it.
   asks for rows when it opens the composer's menu, renders them as its own
   section, orders them, caps the count, closes the menu and restores the caret
   before it calls `onSelect`. The plugin never queries or mutates that menu;
-  the old DOM injection and private bridge are gone.
+  the old DOM injection and private bridge are gone. The one thing it reads
+  back is its own `code[data-sp-mask]` wrapper: if the caret sits inside one,
+  it contributes no rows, so a right-click in a masked code span offers no
+  spellings for code.
 - **The dictionary is the app's.** `host.spellcheck.addWord` /
   `removeWord`, and the two are now symmetric: a word added from the menu stops
   being flagged, and a word deleted on the Custom Words page is flagged again.
