@@ -14,9 +14,11 @@
  * THE DICTIONARY IS THE STANDARD ONE, not a curated list: the SCOWL-derived
  * Hunspell dictionaries that Firefox, LibreOffice and Chromium all ship —
  * sourced from wooorm/dictionaries (the raw mirror of the LibreOffice
- * upstream), which is the same word data those products use. English is
- * embedded so the feature works offline on first run; every other language is
- * fetched on demand from that same canonical source and cached.
+ * upstream), which is the same word data those products use — pinned to a
+ * single commit (see DICT_BASE below), never a branch. The base English
+ * dictionary (`en`, which `en-US` resolves to) is embedded, so an en-US user
+ * never touches the network; every other locale is fetched on demand from
+ * that same pinned source and cached in memory for the session.
  *
  * FREQUENCY / RANKING: Hunspell carries no frequency data, so ties at equal
  * edit distance are broken by corpus frequency from a small bundled rank list
@@ -83,8 +85,21 @@ const DEFAULTS = {
   showSidebarTab: true
 };
 
-/** Canonical Hunspell source. `en` is embedded; the rest are fetched. */
-const DICT_BASE = 'https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries';
+/**
+ * Canonical Hunspell source, PINNED to a commit.
+ *
+ * `wooorm/dictionaries` publishes on `main`, and `main` moves. Pinning is
+ * correctness here, not hygiene: this word list decides what counts as a
+ * misspelling, and a draft is checked against it for as long as the plugin is
+ * loaded. On a moving ref an upstream push would silently change that set
+ * under a user mid-session — a word underlined on one keystroke and accepted
+ * on the next, with nothing here changed to explain it. The SHA is the tree
+ * this plugin was built, tested and reviewed against; bump it deliberately.
+ *
+ * `en` is embedded (EMBEDDED_WORDS below); every other locale is fetched from
+ * here on demand and cached in memory for the session.
+ */
+const DICT_BASE = 'https://raw.githubusercontent.com/wooorm/dictionaries/8cfea406b505e4d7df52d5a19bce525df98c54ab/dictionaries';
 
 /**
  * Chromium locale -> upstream dictionary locale. Chromium's spell locales are
@@ -112,7 +127,7 @@ const LOCALE_MAP = {
  * independent, grammatically — only exists after expansion.
  *
  * Without this the plugin only knew ~48k stems and reported ordinary words as
- * misspellings. Expanding takes it to ~112k real word forms.
+ * misspellings. Expanding takes it to ~118k real word forms.
  *
  * Two details that silently produce ZERO expansions if missed:
  *   - `strip` is the literal token "0" meaning "strip nothing". Matched as
@@ -462,7 +477,7 @@ function caseOf(word) {
 
 // ---------------------------------------------------------------------------
 // Embedded affix table — the whole 3 KB .aff for English. Without it the
-// 48k stems below cannot be expanded into the ~112k words people write.
+// 48k stems below cannot be expanded into the ~118k words people write.
 // ---------------------------------------------------------------------------
 
 const AFF_BLOB =
@@ -50352,7 +50367,7 @@ zymurgy/M
  * The real English vocabulary.
  *
  * EMBEDDED_DIC holds the upstream `stem/FLAGS` lines VERBATIM (49,545 of
- * them), and the affix table above turns them into ~112k actual word forms.
+ * them), and the affix table above turns them into ~118k actual word forms.
  * Building it runs ONCE at load rather than per lookup, so right-click stays
  * instant.
  *

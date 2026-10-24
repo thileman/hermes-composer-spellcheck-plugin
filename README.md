@@ -19,9 +19,11 @@ cannot provide: a working suggestion menu.
 - **Ranks with a standard dictionary.** The English word list is the
   SCOWL/Hunspell corpus from
   [`wooorm/dictionaries`](https://github.com/wooorm/dictionaries) (the same
-  word data Firefox and LibreOffice ship), embedded and affix-expanded at
-  load into ~118k real word forms. Ranking is Damerau-Levenshtein distance,
-  tie-broken by a bundled corpus frequency list.
+  word data Firefox and LibreOffice ship), pinned to commit
+  `8cfea406b505e4d7df52d5a19bce525df98c54ab`, embedded and affix-expanded at
+  load into ~118k real word forms. Every other locale uses the same corpus,
+  fetched from that same pinned commit. Ranking is Damerau-Levenshtein
+  distance, tie-broken by a bundled corpus frequency list.
 - **Keeps the dictionary's capitalisation.** The corpus distinguishes
   `Hermes` from `hermes` and `Monday` from `monday`, and so does this
   plugin: a lowercase proper noun is flagged, and the suggestion offered is
@@ -70,7 +72,7 @@ narrows further, and so on.
 | setting | what it does |
 |---|---|
 | Check spelling | turns the squiggles on and off |
-| Language | which dictionary to use — *Automatic* follows the app's language |
+| Language | which dictionary to use — *Automatic* (the default) follows the app's language |
 | Ignore code spans | leaves `` `code` ``, file names and paths unflagged |
 | Show in the sidebar | shows a **Spellcheck** row in the sidebar. The Custom Words page is always available from the settings, whether the row is shown or not. |
 
@@ -86,7 +88,7 @@ app renders the rows, caps them, closes the menu and restores the caret before
 it calls the plugin's `onSelect`, which applies the correction through
 `action.replaceWord()` — or, for a host without that action,
 `host.composer.getDraft()` / `setDraft()`. The plugin never edits the editor's
-DOM.
+DOM to apply a correction.
 
 The plugin uses the documented SDK surface for everything it can:
 `ctx.register` for the route, the sidebar row and the context-menu rows,
@@ -96,17 +98,63 @@ draft and for spell check, `host.spellcheck` for the app's dictionary, and
 `host.notify` for feedback. It imports only `@hermes/plugin-sdk`, `react` and
 `react/jsx-runtime`.
 
+### The seams it uses
+
+Each app-owned concern goes through a supported seam. The plugin contributes
+data or asks for an effect; the app performs it.
+
+- **The menu is a contribution, not an injection.** One `ctx.register` with
+  `area: COMPOSER_AREAS.contextMenu` and `data: { items, onSelect }`. The app
+  asks for rows when it opens the composer's menu, renders them as its own
+  section, orders them, caps the count, closes the menu and restores the caret
+  before it calls `onSelect`. The plugin never queries or mutates that menu;
+  the old DOM injection and private bridge are gone.
+- **The dictionary is the app's.** `host.spellcheck.addWord` /
+  `removeWord`, and the two are now symmetric: a word added from the menu stops
+  being flagged, and a word deleted on the Custom Words page is flagged again.
+  The plugin writes its own list in `ctx.storage` first — that list is what the
+  page renders — and the host call is best-effort, so a refusing host cannot
+  lose the word.
+- **Corrections go through the draft.** `action.replaceWord(text)` when the
+  menu supplies that action (it knows the word's position), otherwise
+  `host.composer.getDraft()` / `setDraft()` with just the offending word
+  replaced. No `execCommand`, no `Range.insertNode` into the editor.
+- **The squiggles need one more seam.** The underline is Chromium's own and
+  only paints where `spellcheck` is on, which the app sets to false;
+  `host.composer.setSpellcheck(null, enabled)` is how the app is asked to turn
+  it on. It is not in a released SDK yet, so it is feature-detected — see
+  [the trade-off](#the-setspellcheck-trade-off) below.
+
 ## Disclosures
 
 The plugin catalog asks that a user know what a plugin does before
 installing it. This plugin:
 
-- **Makes a network request** to `raw.githubusercontent.com` — specifically the
-  `wooorm/dictionaries` repository — to fetch the `.dic`/`.aff` word lists
-  for a non-English locale. English is embedded, so the plugin works fully
-  offline on first run. The fetched files are *data* (a word list); no code
-  is fetched and nothing is executed. Nothing is fetched unless you switch
-  the language away from English.
+- **Makes network requests** to `raw.githubusercontent.com` — specifically the
+  [`wooorm/dictionaries`](https://github.com/wooorm/dictionaries) repository —
+  for every locale whose word list is not embedded. The base English
+  dictionary (`en`, which `en-US` resolves to) *is* embedded, so an en-US user
+  on the default setting fetches nothing and the plugin is fully offline. Every
+  other locale has its own word list — including `en-GB`, `en-AU` and `en-CA` —
+  fetched as `index.dic` plus `index.aff` from the source pinned at commit
+  `8cfea406b505e4d7df52d5a19bce525df98c54ab`, so the word list cannot change
+  under you between sessions.
+
+  **When it fetches.** The **Language** setting defaults to **Automatic**,
+  which follows the app's language, and the active locale is loaded once as
+  the plugin registers — not lazily on the first right-click. So a user whose
+  *app* language maps to a non-English dictionary (German, French, Chinese, …)
+  fetches on first run without ever changing the plugin's setting. Changing
+  **Language** re-fetches for the new locale. An app language the plugin has
+  no dictionary for (Japanese, say) resolves to the embedded English list and
+  fetches nothing.
+
+  The fetched files are *data* (a word list); no code is fetched and nothing
+  is executed. **If a fetch fails** the plugin logs it and keeps running on the
+  embedded English dictionary: suggestions are still offered and applied,
+  ranked in English, and the fetch is retried the next time the locale is
+  loaded, so changing **Language** can recover it. Only that locale's accuracy
+  degrades — nothing throws and the composer keeps working.
 - **Adds and removes words in the app's spell-check dictionary** through
   `host.spellcheck.addWord` / `removeWord`, so a word you add stops being
   flagged and one you delete is flagged again. The app owns that store
@@ -115,14 +163,19 @@ installing it. This plugin:
   `ctx.storage` under `customWords` — that list is the source of truth the
   Custom Words page renders.
 - **Asks the app to turn the browser's spell checker on**, via
-  `host.composer.setSpellcheck(...)`. Nothing is written onto the composer's
-  `spellcheck` or `lang` attributes any more.
+  `host.composer.setSpellcheck(null, enabled)`. That is the entire mechanism:
+  nothing is written onto the composer's `spellcheck` or `lang` attributes any
+  more, and there is no DOM fallback. The API is in an upstream PR that has not
+  been released, so on a shell without it the call is skipped, Chromium's spell
+  check stays off (no red squiggles), and the plugin's own suggestions keep
+  working.
 - **Wraps code spans in `<code spellcheck="false">`** inside the composer when
-  *Ignore code spans* is on. This is the one place the plugin still edits the
-  editor's DOM, and it undoes itself: the wrappers are unwrapped when the
-  setting is switched off and the text round-trips byte-for-byte. The
-  selectors it uses are public accessibility attributes (`role="textbox"` +
-  `contentEditable`), not the app's internal markup slots.
+  *Ignore code spans* is on. This is deliberate and it is the one place the
+  plugin still edits the editor's DOM; a core-owned seam for it has been
+  requested upstream but does not exist yet. It undoes itself: the wrappers are
+  unwrapped when the setting is switched off and the text round-trips
+  byte-for-byte. The selectors it uses are public accessibility attributes
+  (`role="textbox"` + `contentEditable`), not the app's internal markup slots.
 - **Does not** collect telemetry, read files outside the app's own data
   directory, run shell commands, or start background processes.
 
