@@ -11,7 +11,11 @@ cannot provide: a working suggestion menu.
 
 ## What it does
 
-- **Restores the squiggles** in the composer and the message-edit composer.
+- **Turns the squiggles on** in the composer and the message-edit composer —
+  but only when the app exposes `host.composer.setSpellcheck`, which ships in an
+  unreleased upstream version. Without it the plugin leaves Chromium's spell check
+  off (deliberately, with no DOM-attribute fallback) and the squiggles stay away;
+  the suggestions below work either way.
 - **Adds a right-click suggestion menu** with ranked alternatives,
   contributed to the app's *own* context menu — the app renders it as its own
   section, between its spell-check rows and Cut/Copy/Paste/Select All, so
