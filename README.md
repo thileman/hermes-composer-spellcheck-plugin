@@ -11,12 +11,16 @@ cannot provide: a working suggestion menu.
 
 ## What it does
 
-- **Turns the squiggles on** in the composer and the message-edit composer —
-  but only when the app exposes `host.composer.setSpellcheck`, which is in an
-  open upstream PR and is in no release yet. Without it the plugin leaves
-  Chromium's spell check off (deliberately, with no DOM-attribute fallback) and
-  the squiggles stay away; the suggestions below work either way, though they
-  need the menu seam described under [Install](#install).
+- **Checks your spelling, with one switch.** **Check spelling** turns the
+  squiggles *and* the right-click suggestions on and off together: off means
+  no underlines and no suggestion rows, not just no underlines. The squiggles
+  themselves need `host.composer.setSpellcheck`, which is in an open upstream
+  PR and is in no release yet — without it the plugin leaves Chromium's spell
+  check off (deliberately, with no DOM-attribute fallback), so a released
+  build underlines nothing, and the switch's visible effect there is to turn
+  the suggestion rows off. The suggestions are ranked from the plugin's own
+  dictionary and need only the menu seam described under
+  [Install](#install).
 - **Adds a right-click suggestion menu** with ranked alternatives,
   contributed to the app's *own* context menu — the app renders it as its own
   section, between its spell-check rows and Cut/Copy/Paste/Select All, so
@@ -72,12 +76,19 @@ right-click inside a masked code span contributes no rows, so the menu is left
 exactly as the app drew it.
 
 **Add a word for good.** Right-click the word → **Add to dictionary**. The
-squiggle goes away immediately and the word is saved.
+word is saved and the plugin stops flagging it immediately — no more
+suggestion rows for it, and it survives a reload. On a build with
+`host.composer.setSpellcheck` the squiggle clears at the same time; on a
+released build there is no squiggle to clear yet, see [the `setSpellcheck`
+trade-off](#the-setspellcheck-trade-off).
 
 **Manage your words.** Open **Settings → Plugins → Composer Spell Check →
 Custom Words**, or click **Spellcheck** in the sidebar if you left that row
 showing. There you can search your words, add more (one at a time, or several
-comma-separated), and delete any you have added by mistake. The search filters
+comma-separated), and delete any you have added by mistake. The list covers
+every language you have added words in and tags each word with its dictionary,
+so switching *Language* never hides a word; new words go into the dictionary
+the composer is using. The search filters
 as you type: `op` narrows to every word starting with *op*, and a query that is
 not a prefix (`code`) still matches anywhere in the word, because that is what
 people expect from a search box. Matching is case-insensitive.
@@ -86,7 +97,7 @@ people expect from a search box. Matching is case-insensitive.
 
 | setting | what it does |
 |---|---|
-| Check spelling | turns the squiggles on and off |
+| Check spelling | the master switch: turns the squiggles **and** the right-click suggestions on and off together. On a build without `host.composer.setSpellcheck` there are no squiggles to turn on, so turning it off removes the suggestion rows. |
 | Language | which dictionary to use — *Automatic* (the default) follows the app's language |
 | Ignore code spans | leaves `` `code` ``, file names and paths unflagged |
 | Show in the sidebar | shows a **Spellcheck** row in the sidebar. The Custom Words page is always available from the settings, whether the row is shown or not. |
@@ -193,7 +204,7 @@ installing it. This plugin:
   more, and there is no DOM fallback. The API is in an upstream PR that has not
   been released, so on a shell without it the call is skipped, Chromium's spell
   check stays off (no red squiggles), and the plugin's own suggestions keep
-  working.
+  working while **Check spelling** is on.
 - **Wraps code spans in `<code spellcheck="false">`** inside the composer when
   *Ignore code spans* is on. This is deliberate and it is the one place the
   plugin still edits the editor's DOM; a core-owned seam for it has been
@@ -266,6 +277,10 @@ None of them raise an error at build time.
 | `tests/defined-symbols.test.cjs` | no function that existed in the first commit is called without being defined (three helpers were lost this way) |
 | `tests/ranking-stability.test.cjs` | the suggestion ranker's output is frozen: 60 recorded lists come back byte for byte, a verbatim copy of the pre-rewrite algorithm re-derives them from the same dictionary, the capitalisation rules hold, the menu still caps at six rows — and a ten-letter typo ranks in under 50 ms (the pre-rewrite ranker took 871 ms, and the app ranks inside a `useMemo` during render, so that was a frozen menu) |
 | `tests/menu-failure-reporting.test.cjs` | a correction that could not be applied now says so instead of closing the menu silently; a `host.notify` that throws (or is missing) never escapes the plugin; and nothing is written onto the composer for the plugin's own bookkeeping any more |
+| `tests/docs-truth.test.cjs` | the README and the in-app description describe the switch the code implements: *Check spelling* gates the squiggles **and** the suggestion rows, and "Add a word" no longer promises a squiggle on a build that cannot paint one |
+| `tests/custom-word-toast.test.cjs` | the "Added …" / "already in your custom words" toasts quote the word as STORED (`hermes`), not the raw selection (`Hermes`) the list does not contain |
+| `tests/dictionary-page-locale.test.cjs` | the Custom Words page lists every locale's words, adds to the locale the composer is in (not "the longest list"), and can delete a word from another locale — driven through the real Add field and Remove buttons |
+| `tests/locale-options.test.cjs` | the Language dropdown offers exactly the locales `LOCALE_MAP`/`loadDictionary()` can load — including `en-GB`, `en-AU` and `en-CA` — and every option resolves to its own dictionary rather than to English |
 
 ### Checks
 

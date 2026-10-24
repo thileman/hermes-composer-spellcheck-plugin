@@ -50511,9 +50511,21 @@ async function removeFromAppDictionary(word) {
   }
 }
 
+/**
+ * The form a custom word is STORED in: trimmed and lowercased.
+ *
+ * One function so the store, the duplicate check and the user-facing message
+ * cannot drift. They did: the toast quoted the raw selection ("Hermes") while
+ * the list held "hermes", so the message named a word that was not in the
+ * list it claimed to have added it to.
+ */
+function customWordKey(word) {
+  return String(word || '').trim().toLowerCase();
+}
+
 /** Add a custom word. Returns false when it was already present. */
 function addAllowed(locale, word) {
-  const key = String(word || '').trim().toLowerCase();
+  const key = customWordKey(word);
 
   if (!key) {
     return false;
@@ -50533,7 +50545,7 @@ function addAllowed(locale, word) {
 }
 
 function removeAllowed(locale, word) {
-  const key = String(word || '').trim().toLowerCase();
+  const key = customWordKey(word);
   const set = allowed.get(locale);
 
   if (!set) {
@@ -51242,10 +51254,16 @@ function suggestionItems(word, locale, storage) {
   rows.push({
     label: 'Add to dictionary',
     onSelect: () => {
+      // The message quotes the word AS STORED — lowercased and trimmed — not
+      // the raw selection. "Added “Hermes”" named a word the list does not
+      // contain, and the "already there" message quoted a form the user may
+      // never have typed.
+      const stored = customWordKey(word);
+
       if (addCustomWord(locale, word, storage)) {
-        notifyHost('success', `Added “${word}” to your custom words`);
+        notifyHost('success', `Added “${stored}” to your custom words`);
       } else {
-        notifyHost('info', `“${word}” is already in your custom words`);
+        notifyHost('info', `“${stored}” is already in your custom words`);
       }
     }
   });
@@ -51780,32 +51798,41 @@ function activeLocale(prefs) {
 }
 
 /**
- * The locale whose custom words the page should show.
+ * The locale the Custom Words page ADDS words to.
  *
- * activeLocale() is the locale the COMPOSER is in. That is right for the
- * right-click menu, but wrong for the page: the page is a browser for the
- * user's own word list, and a page opened while no composer is mounted (or
- * while the composer reports a different lang) would show the wrong list —
- * usually an empty one, which looked like the words had vanished.
+ * It has to agree with the right-click menu, which writes through
+ * activeLocale(): a word added from a German composer belongs in the `de`
+ * list. The page used to prefer "whichever locale has the most words", so a
+ * word added in the composer could land in a list the page was not showing —
+ * invisible there, and impossible to delete from it. The header named the
+ * other locale, which made the word recoverable but not obvious.
  *
- * So the page falls back to whichever locale actually HAS words when the
- * active one has none.
+ * So:
+ *   1. an explicitly configured Language wins — that is the dictionary the
+ *      user picked, and the menu uses it too;
+ *   2. otherwise the page follows the composer the user is actually in,
+ *      exactly as activeLocale() does;
+ *   3. only when NO composer is mounted (the page opened from Settings) does
+ *      it fall back to a locale that HAS words, because an empty list there
+ *      looks like the words were lost.
+ *
+ * The page lists EVERY locale's words (see DictionaryPage), so even that
+ * fallback cannot hide a word.
  */
 function pageLocale(prefs) {
-  // The spellchecker's own language pref, resolved. 'auto' falls back to the
-  // UI locale ONLY as a last resort, and the page then shows whichever
-  // locale actually holds words.
-  const configured = prefs.language && prefs.language !== 'auto' ?
-  resolveLocale(prefs.language) :
-  null;
-
-  if (configured && (allowed.get(configured) || new Set()).size > 0) {
-    return configured;
+  if (prefs.language && prefs.language !== 'auto') {
+    return resolveLocale(prefs.language);
   }
 
-  // Whichever locale actually has words. The user added them, so they are
-  // the ones they expect to see listed — even if the UI is in another
-  // language, which is what made the list look empty.
+  // A mounted composer knows its own language; that is the one the menu will
+  // write to, so it is the one the page must add to.
+  const el = document.querySelector(SELECTOR);
+
+  if (el) {
+    return resolveLocale(el.lang || document.documentElement.lang || navigator.language || 'en');
+  }
+
+  // No composer: whichever locale actually has words beats an empty list.
   let best = null;
   let bestCount = 0;
 
@@ -51816,11 +51843,7 @@ function pageLocale(prefs) {
     }
   }
 
-  if (best) {
-    return best;
-  }
-
-  return configured || activeLocale(prefs);
+  return best || activeLocale(prefs);
 }
 
 /** Ensure the active locale is loaded, fetching if needed. */
@@ -52060,8 +52083,28 @@ function DictionaryPage({ prefs, storage }) {
   // line the list only updates when you leave and come back.
   useValue($allowedVersion);
 
+  // New words go to the locale the composer is checking in — the same one the
+  // right-click menu writes to, so an add here and an add there land in the
+  // same list.
   const locale = pageLocale(prefs);
-  const words = [...(allowed.get(locale) || [])].sort();
+
+  // The LIST, though, is every word from every locale. Showing only the active
+  // locale's words left a word added from another composer language invisible
+  // here, and therefore impossible to delete. Each entry carries its own
+  // locale, which is what the delete button acts on.
+  const entries = [];
+
+  for (const [loc, set] of allowed) {
+    for (const word of set) {
+      entries.push({ locale: loc, word });
+    }
+  }
+
+  entries.sort((a, b) => a.word.localeCompare(b.word) || a.locale.localeCompare(b.locale));
+
+  // Named in the header (and on each row when there is more than one), so the
+  // page always says which dictionary a word belongs to.
+  const locales = [...new Set(entries.map((e) => e.locale))].sort();
 
   // Search filters as you type. Prefix match on the leading characters, so
   // "o" shows every word starting with o, "op" narrows to op..., "ope" to
@@ -52070,12 +52113,12 @@ function DictionaryPage({ prefs, storage }) {
   // box. Matching is case-insensitive.
   const needle = query.trim().toLowerCase();
   const shown = needle ?
-  words.filter((w) => {
-    const lower = w.toLowerCase();
+  entries.filter((e) => {
+    const lower = e.word.toLowerCase();
 
     return lower.startsWith(needle) || lower.includes(needle);
   }) :
-  words;
+  entries;
 
   const commit = () => {
     const value = draft.trim();
@@ -52110,14 +52153,16 @@ function DictionaryPage({ prefs, storage }) {
   };
 
   // Delete goes through removeCustomWord(), the mirror of the add above, so a
-  // removed word leaves BOTH stores — our list and the app's dictionary.
-  const remove = (word) => {
-    if (removeCustomWord(locale, word, storage)) {
+  // removed word leaves BOTH stores — our list and the app's dictionary. The
+  // locale is the ROW's, not the active one: the row can belong to a
+  // dictionary other than the one the composer is using.
+  const remove = (word, wordLocale) => {
+    if (removeCustomWord(wordLocale, word, storage)) {
       notifyHost('success', `Removed “${word}”`);
     }
   };
 
-  const total = words.length;
+  const total = entries.length;
   const dict = rankFor(locale);
 
 
@@ -52136,7 +52181,7 @@ function DictionaryPage({ prefs, storage }) {
       jsx('span', {
         className: 'text-xs text-(--ui-text-tertiary)',
         key: 'c', children:
-        `${total} word${total === 1 ? '' : 's'} · ${locale}` })] }
+        `${total} word${total === 1 ? '' : 's'} · ${locales.length ? locales.join(', ') : locale}` })] }
     ),
 
     // --- one field: search AND add -------------------------------------
@@ -52198,21 +52243,28 @@ function DictionaryPage({ prefs, storage }) {
       // row rendered with no measurable size — the page showed its count
       // and search box but an empty-looking list. These styles stand alone.
       : jsx('div', { className: 'flex flex-col', key: 'rows', children:
-        shown.map((word) =>
+        shown.map((entry) =>
         jsx('div', {
           className: 'flex items-center justify-between gap-2 py-1',
-          key: word, children:
+          key: `${entry.locale}:${entry.word}`, children:
           [
           jsx('span', {
-            className: 'min-w-0 truncate text-sm text-(--ui-text-primary)',
+            className: 'min-w-0 flex-1 truncate text-sm text-(--ui-text-primary)',
             key: 'w', children:
-            word }),
+            entry.word }),
+          // Only worth the pixels when the list really mixes dictionaries.
+          locales.length > 1 ?
+          jsx('span', {
+            className: 'shrink-0 text-xs text-(--ui-text-tertiary)',
+            key: 'l', children:
+            entry.locale }) :
+          null,
           jsx('button', {
-            'aria-label': `Remove ${word}`,
+            'aria-label': `Remove ${entry.word}`,
             className:
             'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer text-(--ui-text-tertiary) hover:bg-(--ui-control-hover-background)',
             key: 'x',
-            onClick: () => remove(word),
+            onClick: () => remove(entry.word, entry.locale),
             type: 'button', children:
             jsx(Codicon, { key: 'i', name: 'trash' }) })] }
         )
@@ -52461,14 +52513,21 @@ export default {
             }
           };
 
-          const locales = ['auto', 'en', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'ru',
-          'uk', 'sv', 'tr', 'cs', 'da', 'el', 'he', 'fa', 'ko'];
+          // Every value here is a locale the plugin can actually load: 'en' is
+          // embedded, and the rest have an index.dic/index.aff at the pinned
+          // upstream commit. The three regional English dictionaries are in
+          // the list because LOCALE_MAP resolves them and loadDictionary()
+          // fetches them exactly like any other locale — leaving them out
+          // made them reachable only by hand-editing the pref.
+          const locales = ['auto', 'en', 'en-GB', 'en-AU', 'en-CA', 'de', 'fr', 'es',
+          'it', 'pt', 'nl', 'pl', 'ru', 'uk', 'sv', 'tr', 'cs', 'da', 'el', 'he', 'fa',
+          'ko'];
 
           return jsxs('div', { className: 'flex flex-col gap-1', children: [
             jsx(ToggleRow, {
               checked: p.enabled,
               description:
-              'Underlines misspellings with the standard SCOWL/Hunspell dictionary. Right-click a misspelling for suggestions.',
+              'Underlines misspellings with the standard SCOWL/Hunspell dictionary and offers right-click suggestions. Turning it off stops both.',
               key: 'on',
               label: 'Check spelling',
               onChange: (value) => set({ enabled: value })
