@@ -233,8 +233,8 @@ Contributions are welcome — open an issue or a pull request.
   [hermes-agent](https://github.com/NousResearch/hermes-agent) rather than
   reaching into the app's markup.
 - **Keep the surface small.** The plugin's contribution areas are a route, a
-  sidebar row, a settings page and a context-menu injection. New UI goes in
-  one of those.
+  sidebar row, a settings page and a composer context-menu contribution. New
+  UI goes in one of those.
 
 **Reporting a bug:** please include your Hermes version
 (`Help → About`), your OS, and what you expected versus what happened. For a
