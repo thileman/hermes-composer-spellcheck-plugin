@@ -33,6 +33,7 @@ import {
   atom,
   Button,
   Codicon,
+  COMPOSER_AREAS,
   EmptyState,
   host,
   ListRow,
@@ -52,7 +53,7 @@ const ID = 'hermes-composer-spellcheck-plugin';
 
 /** Main composer + message editor share this slot. */
 /**
- * The composer's editable element and the quick-entry input.
+ * The composer's editable element.
  *
  * Selected by ROLE, not by the app's internal markup: the Desktop Plugin
  * SDK forbids "reaching into the app's ... own markup (querying data-slot /
@@ -63,13 +64,15 @@ const ID = 'hermes-composer-spellcheck-plugin';
  *
  * The composer's editable div carries role="textbox" and an aria-label — public
  * accessibility attributes that mean the same thing to assistive tech and to
- * us. An <input> has an implicit textbox role, so the quick-entry field is
- * found the same way. Neither selector depends on the app's private slot
- * names, so it survives a markup change that a data-slot query would not.
+ * us. The selector does not depend on the app's private slot names, so it
+ * survives a markup change that a data-slot query would not.
+ *
+ * The quick-entry <input> used to be listed here too, because the plugin
+ * wrote `spellcheck`/`lang` onto it. It no longer touches either attribute on
+ * any element (see applySpellcheck), so there is nothing left to find there.
  */
 const EDITOR_SELECTOR = '[role="textbox"][contenteditable="true"], [role="textbox"][contenteditable=""], [role="textbox"][contenteditable="plaintext-only"]';
-const QUICK_ENTRY_SELECTOR = 'input[type="text"], input:not([type]), input[type="search"], input[type="email"], input[type="url"]';
-const SELECTOR = `${EDITOR_SELECTOR}, ${QUICK_ENTRY_SELECTOR}`;
+const SELECTOR = EDITOR_SELECTOR;
 
 const DEFAULTS = {
   enabled: true,
@@ -50429,35 +50432,61 @@ function saveAllowed(storage) {
 }
 
 /**
- * Teach CHROMIUM about a custom word.
+ * Teach the APP's spell checker a custom word.
  *
- * The red squiggle is painted by Chromium from its own session dictionary, not
- * by us — so recording the word in our list silences only OUR menu and leaves
- * the underline in place. Until the word reaches Chromium's dictionary the
- * composer keeps flagging it, which is exactly what a user means by "I added
- * it and it's still red".
+ * The red squiggle is painted by Chromium from the app's own session
+ * dictionary, not by us — so recording the word in our list silences only OUR
+ * menu and leaves the underline in place. `host.spellcheck` is the SDK seam
+ * to that dictionary: the word gate and the Chromium session call both live
+ * in the app's main process.
  *
- * Best-effort: addWordToSpellCheckerDictionary is main-process-only, and a
- * failure here must never break the word list itself.
+ * This replaces the old private `window.hermesDesktop.contextMenuSpellcheck`
+ * bridge, which reached over the plugin boundary into an undocumented app
+ * global (and wrote Chromium's "Custom Dictionary.txt" itself).
+ *
+ * Best-effort, always: a host that refuses the word (or a shell that cannot
+ * do it) leaves our own list intact, and that list is what the Custom Words
+ * page shows.
  */
-function teachChromosphere(locale, word) {
+async function addToAppDictionary(word) {
+  const spellcheck = host.spellcheck;
+
+  if (!spellcheck || typeof spellcheck.addWord !== 'function') {
+    return false;
+  }
+
   try {
-    const editor = document.querySelector(SELECTOR);
-    const restore = document.activeElement;
-
-    if (editor instanceof HTMLElement) {
-      editor.focus({ preventScroll: true });
-    }
-
-    window.hermesDesktop?.contextMenuSpellcheck?.({ kind: 'add', word });
-
-    if (restore instanceof HTMLElement && restore !== editor) {
-      restore.focus();
-    }
+    return (await spellcheck.addWord(word)) === true;
   } catch {
 
-    // No bridge, or the editor is gone: the word is still saved in our list.
-  }}
+    // The host refused the word: our list still holds it.
+    return false;
+  }
+}
+
+/**
+ * Unteach the app's spell checker.
+ *
+ * Removal used to touch our list only, so a word deleted from the Custom
+ * Words page kept its Chromium entry — the app went on accepting it and the
+ * two lists disagreed. Every removal now goes through here too, which is what
+ * makes add and remove symmetric.
+ */
+async function removeFromAppDictionary(word) {
+  const spellcheck = host.spellcheck;
+
+  if (!spellcheck || typeof spellcheck.removeWord !== 'function') {
+    return false;
+  }
+
+  try {
+    return (await spellcheck.removeWord(word)) === true;
+  } catch {
+
+    // Shell cannot do it: our list is still corrected.
+    return false;
+  }
+}
 
 /** Add a custom word. Returns false when it was already present. */
 function addAllowed(locale, word) {
@@ -50495,6 +50524,46 @@ function removeAllowed(locale, word) {
   }
 
   return removed;
+}
+
+/**
+ * Add ONE word, to both stores.
+ *
+ * Our list is written and persisted first, synchronously, because that is the
+ * write that must not be lost; the app's dictionary is then told, best-effort.
+ * The host call is deliberately not awaited by the UI: the word is already
+ * ours, the spell-check round trip crosses to the main process, and a slow or
+ * refusing host must not hold up the menu or the page.
+ *
+ * Returns false when the word was already there, so a caller can tell an add
+ * from a repeat.
+ */
+function addCustomWord(locale, word, storage) {
+  if (!addAllowed(locale, word)) {
+    return false;
+  }
+
+  saveAllowed(storage);
+  void addToAppDictionary(String(word || '').trim().toLowerCase());
+
+  return true;
+}
+
+/**
+ * Remove ONE word, from both stores — the mirror of addCustomWord().
+ *
+ * Symmetry is the point: before this, a delete reached our list and nothing
+ * else, so the app's spell checker kept accepting the word.
+ */
+function removeCustomWord(locale, word, storage) {
+  if (!removeAllowed(locale, word)) {
+    return false;
+  }
+
+  saveAllowed(storage);
+  void removeFromAppDictionary(String(word || '').trim().toLowerCase());
+
+  return true;
 }
 
 function rankFor(locale) {
@@ -50803,385 +50872,138 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
   return out;
 }
 // ---------------------------------------------------------------------------
-// Menu (plain DOM - react-dom portals are not importable from a plugin)
+// Composer context menu — an SDK contribution, not a DOM injection
 // ---------------------------------------------------------------------------
+//
+// This block used to be a DOM injection: query the app's Radix menu, copy a
+// rendered row's className, insert <button>s, capture keydown to hand-roll
+// arrow navigation, write `data-highlighted` to fake Radix's highlight, and
+// dispatch a synthetic `pointerdown` to close the menu. Every step was a bet
+// on the app's internal markup, and the maintainer asked for it to go.
+//
+// COMPOSER_AREAS.contextMenu is the supported seam. We return rows; the app
+// renders them as their own section of its own menu — sections ordered by
+// plugin id, capped at 6 rows each, placed between its spell-check rows and
+// the edit verbs. It also closes the menu and returns the caret to the
+// composer before calling onSelect. Nothing here queries or mutates the menu.
 
-/** The rows we injected into the app's menu, if any. */
-let injected = null;
-
-/** Remove the rows we injected, so a stale menu cannot outlive its word. */
-function clearInjected() {
-  injected?.remove();
-  injected = null;
-}
+/** 5 suggestions + "Add to dictionary" = the app's 6-row-per-plugin cap. */
+const SUGGESTION_ROWS = 5;
 
 /**
- * The word under the caret, and a range covering it.
+ * The rows this plugin contributes for the right-clicked word.
  *
- * The composer's text lives in a text node inside a contenteditable, so the
- * selection's start container is that node and the offsets index into its
- * value. A collapsed caret sits on a BOUNDARY between two words, so the
- * probe steps to the nearest word character first -- otherwise the word
- * found depends on which side of the gap the caret happened to land.
+ * `[]` for a word that is spelled correctly, or one the plugin cannot judge
+ * yet (dictionary still loading): the app's menu then shows unchanged.
  */
-function wordAtCaret() {
-  const sel = document.getSelection();
+function suggestionItems(word, locale, storage) {
+  const entry = rankFor(locale);
 
-  if (!sel || !sel.rangeCount) {
-    return null;
+  if (!word || !entry.ready || isKnown(entry, word, locale)) {
+    return [];
   }
 
-  const range = sel.getRangeAt(0);
-  const node = range.startContainer;
+  // suggest() is the ranker: Damerau-Levenshtein distance, ties broken by the
+  // bundled corpus frequency list. It also carries the DICTIONARY's
+  // capitalisation out, which is why "english" is offered "English" — the
+  // spelling Chromium accepts.
+  const rows = suggest(entry, word, FREQ_RANK, SUGGESTION_ROWS).map((candidate) => ({
+    label: candidate,
+    onSelect: (action) => applyCorrection(action, word, candidate)
+  }));
 
-  if (node.nodeType !== Node.TEXT_NODE) {
-    return null;
-  }
-
-  const text = node.nodeValue || '';
-  const isWord = (ch) => /[\p{L}'\u2019-]/u.test(ch);
-  let start = range.startOffset;
-  let end = start;
-
-  // A collapsed caret sits on a boundary; step to the nearest word character.
-  if (!isWord(text[start] || '')) {
-    let probe = start;
-
-    while (probe > 0 && !isWord(text[probe - 1])) {
-      probe--;
-    }
-
-    if (probe === start) {
-      while (probe < text.length && !isWord(text[probe])) {
-        probe++;
+  rows.push({
+    label: 'Add to dictionary',
+    onSelect: () => {
+      if (addCustomWord(locale, word, storage)) {
+        host.notify({ kind: 'success', message: `Added “${word}” to your custom words` });
+      } else {
+        host.notify({ kind: 'info', message: `“${word}” is already in your custom words` });
       }
     }
+  });
 
-    start = probe;
-    end = probe;
-  }
-
-  while (start > 0 && isWord(text[start - 1])) {
-    start--;
-  }
-
-  while (end < text.length && isWord(text[end])) {
-    end++;
-  }
-
-  const word = text.slice(start, end);
-
-  if (!word || word.length < 2) {
-    return null;
-  }
-
-  const out = range.cloneRange();
-
-  out.setStart(node, start);
-  out.setEnd(node, end);
-
-  return { word, range: out };
+  return rows;
 }
 
 /**
- * Adopt the app's own menu instead of replacing it.
+ * Replace `word` with `text` in a draft, or return null.
  *
- * The app opens a Radix DropdownMenu (app-context-menu.tsx:632) whose content
- * element carries role="menu". It renders suggestions of its own ONLY when
- * Chromium's payload reaches augmentSpellcheck() — which never happens for a
- * contenteditable, and that store is not plugin-reachable. So we leave the app's
- * menu completely alone and PREPEND our rows into its DOM: one menu, the app's
- * Cut/Copy/Paste/Select All below ours, no second menu and no overlap.
- *
- * Styling is copied from a menuitem the app already rendered, so the rows are
- * visually native instead of an imitation.
+ * Only an UNAMBIGUOUS match is rewritten. If the word occurs more than once in
+ * the draft there is no way to tell from the text alone which occurrence the
+ * user right-clicked, and rewriting the wrong one is worse than leaving the
+ * draft alone — the caller reports the failure instead of guessing. This is
+ * the fallback path only; `action.replaceWord` knows the position.
  */
-function injectSuggestions(word, suggestions, onPick, onAdd) {
-  const menu =
-  document.querySelector('[role="menu"],[data-radix-menu-content]') ||
-  document.querySelector('[data-radix-dropdown-menu-content]');
+function replaceWholeWord(draft, word, text) {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(^|[^\\p{L}])${escaped}(?![\\p{L}])`, 'gu');
+  const hits = draft.match(re);
 
-  if (!(menu instanceof HTMLElement)) {
+  if (!hits || hits.length !== 1) {
+    return null;
+  }
+
+  return draft.replace(re, (match, lead) => `${lead}${text}`);
+}
+
+/**
+ * Apply one correction through the composer host.
+ *
+ * Two seams, in order:
+ *
+ *  1. `action.replaceWord(text)` — the app's own word-anchored replace. It
+ *     knows WHERE the right-clicked word was and returns false if the composer
+ *     no longer holds it there, so a keystroke between opening the menu and
+ *     choosing a row cannot corrupt the draft. Preferred, always.
+ *  2. `host.composer.getDraft` / `setDraft` — for a host whose menu action
+ *     predates replaceWord, and for any caller with no action at all. The
+ *     draft is read as live text (unsaved keystrokes included), the word is
+ *     replaced in the TEXT, and the whole draft is written back; the app
+ *     hydrates @-refs and /-commands into chips itself.
+ *
+ * `document.execCommand('insertText')` and `range.insertNode()` are gone.
+ * They edited the DOM behind the composer's own reconciler, which rewrites
+ * the editor on the next keystroke — so a correction was sometimes lost and
+ * sometimes doubled, and the caret was wherever the browser left it.
+ */
+async function applyCorrection(action, word, text) {
+  if (action && typeof action.replaceWord === 'function') {
+    try {
+      if (action.replaceWord(text)) {
+        return true;
+      }
+    } catch {
+
+      // Fall through to the draft seam rather than write into stale DOM.
+    }
+  }
+
+  const composer = host.composer;
+
+  if (!composer ||
+  typeof composer.getDraft !== 'function' ||
+  typeof composer.setDraft !== 'function') {
     return false;
   }
 
-  clearInjected();
-
-  // Borrow the app's OWN row classes rather than inventing a look: a real
-  // menuitem already carries menuItemClass + menuItemFocusClass +
-  // searchHoverClass (components/ui/dropdown-menu.tsx), whose highlight is
-  // `data-[highlighted]:bg-(--ui-control-active-background)` — the same rule
-  // that paints Cut/Copy/Paste. Copying the className verbatim means our rows
-  // are highlighted by the app's stylesheet, identically, and stay correct if
-  // the theme changes.
-  const sample = menu.querySelector('[role="menuitem"]');
-  const nativeClass = sample?.className || '';
-  const cs = sample ? getComputedStyle(sample) : null;
-  const pad = cs ? `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}` : '6px 8px';
-  const radius = cs?.borderTopLeftRadius || '5px';
-  const fontSize = cs?.fontSize || '13px';
-  const fontFamily = cs?.fontFamily || 'inherit';
-  const color = cs?.color || 'inherit';
-
-  const host = document.createElement('div');
-
-  host.setAttribute('data-spellcheck-injected', '');
-  host.style.cssText = 'display:flex;flex-direction:column;margin:0;padding:0';
-
-  const makeRow = (label, onClick, bold) => {
-    const row = document.createElement('button');
-
-    row.type = 'button';
-    row.setAttribute('role', 'menuitem');
-    // Radix marks its own items with this attribute and orders keyboard
-    // navigation by DOM position, so our rows participate in the same list.
-    row.setAttribute('data-radix-collection-item', '');
-    row.dataset.spellcheckRow = 'true';
-    if (nativeClass) {
-      row.className = nativeClass;
-    }
-
-    // Only the bits the class list cannot give us: these are plain DOM nodes,
-    // not React elements, so they carry no scoped class of their own.
-    row.style.cssText = [
-    'display:flex', 'align-items:center', 'gap:0.5rem', 'width:100%',
-    `padding:${pad}`,
-    `border-radius:${radius}`,
-    `font-family:${fontFamily}`,
-    `font-size:${fontSize}`,
-    'color:inherit',
-    'text-align:left', 'cursor:pointer',
-    'pointer-events:auto',
-    'border:0'].
-    join(';');
-
-    if (bold) {
-      row.style.fontWeight = '600';
-    }
-
-    // Hover and focus are the app's own CSS (searchHoverClass applies
-    // data-[highlighted], menuItemFocusClass applies focus:), so moving the
-    // real focus is enough — no hover bookkeeping to keep in sync.
-    row.addEventListener('mouseenter', () => {
-      row.setAttribute('data-highlighted', '');
-    });
-    row.addEventListener('mouseleave', () => {
-      if (document.activeElement !== row) {
-        row.removeAttribute('data-highlighted');
-      }
-    });
-    row.addEventListener('click', (event) => {
-      // Keep the event inside the app's menu so Radix does not treat this
-      // as an outside click before we act.
-      event.preventDefault();
-      event.stopPropagation();
-
-      row.removeAttribute('data-highlighted');
-
-      const done = onClick();
-
-      if (done !== false) {
-        closeAppMenu();
-      }
-    });
-
-    row.textContent = label;
-    return row;
-  };
-
-  for (const s of suggestions) {
-    host.append(makeRow(s, () => onPick(s), true));
-  }
-
-  host.append(makeRow('Add to dictionary', () => onAdd(word), false));
-
-  // Radix only binds Enter/Space to items in its ref registry, so our rows
-  // need their own activation or keyboard users could focus but not choose.
-  const activate = (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') {
-      return;
-    }
-
-    const el = event.target;
-
-    if (el instanceof HTMLElement && el.dataset.spellcheckRow) {
-      event.preventDefault();
-      event.stopPropagation();
-      el.click();
-    }
-  };
-
-  host.addEventListener('keydown', activate);
-
-  // A separator so the app's own verbs read as a separate group below.
-  const sep = document.createElement('div');
-
-  sep.setAttribute('role', 'separator');
-  sep.style.cssText = 'height:1px;margin:0.25rem 0;background:var(--ui-stroke-tertiary)';
-  host.append(sep);
-
-  // First child: above the app's Cut/Copy/Paste, like a native spelling menu.
-  menu.insertBefore(host, menu.firstChild);
-  injected = host;
-
-  wireKeyboard(menu);
-
-  return true;
-}
-
-/**
- * Keyboard navigation across EVERY row in the menu — ours and the app's.
- *
- * Radix's own arrow-key handling walks a React ref registry (`useCollection`'s
- * `itemMap`), which only real <MenuItem> components populate by rendering with
- * a ref. Rows we injected are not in that registry, so Radix cannot step onto
- * them no matter what attributes they carry.
- *
- * So we run the stepping ourselves, over the DOM: every element carrying
- * `data-radix-collection-item` inside the open menu, in document order — which
- * is exactly the set Radix would walk. Radix's handler does not stopPropagation
- * on ArrowUp/ArrowDown, so it still runs first and moves focus among the app's
- * items; we then correct the landing spot to include ours.
- */
-function wireKeyboard(menu) {
-  const KEYS = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
-
-  const items = () =>
-  Array.from(
-    menu.querySelectorAll('[data-radix-collection-item]')
-  ).filter((el) => el instanceof HTMLElement && el.offsetParent !== null);
-
-  const handler = (event) => {
-    if (!KEYS.includes(event.key)) {
-      return;
-    }
-
-    const list = items();
-
-    if (!list.length) {
-      return;
-    }
-
-    const current = list.indexOf(document.activeElement);
-    let next = -1;
-
-    if (event.key === 'Home') {
-      next = 0;
-    } else if (event.key === 'End') {
-      next = list.length - 1;
-    } else if (current === -1) {
-      next = event.key === 'ArrowDown' ? 0 : list.length - 1;
-    } else {
-      const delta = event.key === 'ArrowDown' ? 1 : -1;
-      const stepped = current + delta;
-
-      // No loop: the first row steps out of the list rather than wrapping,
-      // which lets the browser close the menu from the top/bottom edge.
-      next = stepped >= 0 && stepped < list.length ? stepped : -1;
-    }
-
-    if (next === -1) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const target = list[next];
-
-    target.focus();
-
-    // Radix's own keydown never runs (we stopped propagation above), so it
-    // never marks the app's items highlighted. Clear the previous mark on
-    // every row and apply it to the one we landed on.
-    //
-    // Two different mechanisms, because the two kinds of row are styled
-    // differently: our rows carry INLINE styles and have no Radix CSS to
-    // match, while the app's rows are styled by Radix's [data-highlighted]
-    // rule and must be left to it — painting an inline background over them
-    // fights their own CSS.
-    // Radix highlights through the `data-highlighted` attribute, styled by
-    // the app's own class list (menuItemFocusClass /
-    // `data-[highlighted]:bg-(--ui-control-active-background)`). Setting
-    // that attribute is therefore the whole job for BOTH kinds of row — our
-    // rows carry a copy of those same classes, so the identical rule paints
-    // them. No inline colours: inventing a second highlight here is what made
-    // our rows look different from the app's in the first place.
-    for (const el of list) {
-      el.removeAttribute('data-highlighted');
-    }
-
-    target.setAttribute('data-highlighted', '');
-  };
-
-  // Capture on the menu so we observe the keydown before focus moves.
-  menu.addEventListener('keydown', handler, true);
-
-  // Escape should still reach Radix so the menu closes normally.
-  return () => menu.removeEventListener('keydown', handler, true);
-}
-
-/**
-/**
- * The app opens its menu from its own capture-phase handler, which runs before
- * ours, so at the moment we decide the menu is not mounted yet. Poll a bounded
- * number of frames for it rather than observing document.body (a forbidden
- * plugin construct).
- */
-function whenMenuOpen(attempt) {
-  let tries = 0;
-
-  const tick = () => {
-    if (attempt()) {
-      return;
-    }
-
-    if (++tries > 12) {
-      return;
-    }
-
-    requestAnimationFrame(tick);
-  };
-
-  requestAnimationFrame(tick);
-}
-
-/** Close the app's menu the way Radix expects: an outside pointerdown. */
-function closeAppMenu() {
-  clearInjected();
-
   try {
-    document.body.dispatchEvent(
-      new PointerEvent('pointerdown', {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        buttons: 1,
-        clientX: 1,
-        clientY: 1,
-        pointerId: 1,
-        pointerType: 'mouse',
-        isPrimary: true
-      })
-    );
+    const draft = await composer.getDraft(null);
+
+    if (typeof draft !== 'string') {
+      return false;
+    }
+
+    const next = replaceWholeWord(draft, word, text);
+
+    if (next === null) {
+      return false;
+    }
+
+    return (await composer.setDraft(null, next)) === true;
   } catch {
-
-    // No PointerEvent constructor; the menu closes on the next gesture.
-  }}
-
-/** Replace the selected range through the editor's own input path. */
-function replaceRange(range, text) {
-  const sel = document.getSelection();
-
-  sel.removeAllRanges();
-  sel.addRange(range);
-
-  if (!document.execCommand('insertText', false, text)) {
-    range.deleteContents();
-    range.insertNode(document.createTextNode(text));
+    return false;
   }
-
-  sel.collapseToEnd();
 }
 
 // ---------------------------------------------------------------------------
@@ -51685,13 +51507,45 @@ function ensureLocale(prefs) {
   return loadDictionary(locale);
 }
 
-function applySpellcheck(prefs) {
-  for (const el of document.querySelectorAll(SELECTOR)) {
-    el.spellcheck = prefs.enabled;
+/**
+ * Turn the composer's spell checker on or off, through the host.
+ *
+ * The red squiggle is Chromium's, and Chromium only paints it for an element
+ * whose `spellcheck` is on — which the app sets to false. `host.composer
+ * .setSpellcheck` is the supported way to flip it: the app owns the element
+ * and applies the state itself.
+ *
+ * This used to write `el.spellcheck` and `el.lang` onto the composer elements
+ * directly. That reached into the app's own DOM (forbidden by the desktop
+ * surface rule), and it lost the fight anyway: the composer's reconciler
+ * rewrites the editor on every keystroke, so the attribute went back to false
+ * and the squiggles stayed off. There is NO DOM fallback any more — a build
+ * without the API simply keeps Chromium's spell check off. Everything else
+ * still works: our suggestions are ranked from our own dictionary, and the
+ * host's spelling is only the underline.
+ *
+ * Feature-detected on purpose: `setSpellcheck` is newer than this plugin's
+ * floor, so an older shell has to keep loading the plugin.
+ */
+function applySpellcheck(enabled) {
+  const composer = host.composer;
+  const setSpellcheck = composer?.setSpellcheck;
 
-    if (prefs.enabled && !el.lang) {
-      el.lang = document.documentElement.lang || 'en-US';
+  if (typeof setSpellcheck !== 'function') {
+    return;
+  }
+
+  try {
+    const pending = setSpellcheck.call(composer, null, Boolean(enabled));
+
+    // The host crosses to the main process; a refusal must not surface as an
+    // unhandled rejection on a toggle the user already saw.
+    if (pending && typeof pending.catch === 'function') {
+      pending.catch(() => {});
     }
+  } catch {
+
+    // Host refused: the underline stays off, the menu still works.
   }
 }
 
@@ -51912,19 +51766,11 @@ function DictionaryPage({ prefs, storage }) {
     const existed = [];
 
     for (const raw of value.split(/[,\s]+/)) {
-      if (addAllowed(locale, raw)) {
+      if (addCustomWord(locale, raw, storage)) {
         added.push(raw.toLowerCase());
       } else if (raw.trim()) {
         existed.push(raw.toLowerCase());
       }
-    }
-
-    if (added.length || existed.length) {
-      for (const w of added) {
-        teachChromosphere(locale, w);
-      }
-
-      saveAllowed(storage);
     }
 
     if (added.length) {
@@ -51939,9 +51785,10 @@ function DictionaryPage({ prefs, storage }) {
     setQuery('');
   };
 
+  // Delete goes through removeCustomWord(), the mirror of the add above, so a
+  // removed word leaves BOTH stores — our list and the app's dictionary.
   const remove = (word) => {
-    if (removeAllowed(locale, word)) {
-      saveAllowed(storage);
+    if (removeCustomWord(locale, word, storage)) {
       host.notify({ kind: 'success', message: `Removed “${word}”` });
     }
   };
@@ -52074,17 +51921,18 @@ export default {
   register(ctx) {
     const prefs = atom({ ...DEFAULTS, ...(ctx.storage.get('prefs', {}) || {}) });
 
-    // Custom words survive a reload now.
+    // Custom words survive a reload now. This list is the plugin's source of
+    // truth (it drives the Custom Words page and our own recognition); the
+    // app's spell-check dictionary is a separate store that only paints the
+    // underline.
+    //
+    // The old startup REPLAY is gone with the bridge that needed it: that
+    // existed because a word could be saved to our list while
+    // `contextMenuSpellcheck` was unavailable, so it had to be re-pushed into
+    // Chromium on every load. The app's dictionary is persistent — a word
+    // added through `host.spellcheck.addWord` is already remembered by the
+    // app on the next launch, so pushing it again would only duplicate work.
     loadAllowed(ctx.storage);
-
-    // Replay everything already in our list into Chromium. Words added before
-    // teachChromosphere existed (or while the bridge was unavailable) were saved
-    // but never reached the session dictionary, so they stayed red until now.
-    for (const [loc, set] of allowed) {
-      for (const w of set) {
-        teachChromosphere(loc, w);
-      }
-    }
 
     const P = (...a) => console.error('[spellcheck]', ...a);
 
@@ -52116,114 +51964,30 @@ export default {
 
     void ensureReady();
 
-    /**
-     * The app's own handler runs in the CAPTURE phase on window and calls
-     * stopPropagation(), but a same-node listener still runs, so this sees
-     * every context menu inside the composer.
-     */
-    /**
-     * The app's handler (app-context-menu.tsx:612) registers on window in the
-     * CAPTURE phase at boot, so it always runs BEFORE this one and opens its
-     * own menu first. `stopImmediatePropagation()` cannot help — it only stops
-     * listeners registered after ours — so we cannot prevent the app from
-     * opening.
-     *
-     * We therefore do the opposite of preventing: we decide synchronously,
-     * and for a misspelling we suppress OUR default and close the app's menu
-     * on the next tick, then paint one combined menu in its place. The gesture
-     * is therefore never left half-handled: a known word lets the app's menu
-     * stand, a misspelling gets suggestions plus the clipboard verbs it
-     * would otherwise have had.
-     *
-     * The decision MUST be synchronous — awaiting the dictionary here would
-     * let the event finish dispatching first, which is why the locale is
-     * warmed at register() instead.
-     */
-    /**
-     * We add suggestions to the app's OWN context menu; we never replace it.
-     *
-     * The app's handler (app-context-menu.tsx:612) is on window in the
-     * CAPTURE phase and registered at boot, so it always runs first and
-     * opens the menu before we see the event. That is exactly what we want:
-     * let it open, then prepend our rows into the DOM it just rendered.
-     *
-     * The decision must be synchronous. Awaiting the dictionary here would let
-     * the event finish dispatching with no way to undo it, so the locale is
-     * warmed at register() instead and we read it inline.
-     */
-    const onContextMenu = (event) => {
-      clearInjected();
-
-      const target = event.target;
-
-      if (!(target instanceof Element) || !target.closest(SELECTOR)) {
-        return;
+    // The suggestion rows are a CONTRIBUTION, not an injection: the app asks
+    // every plugin for its rows when it opens the composer's context menu,
+    // renders them as their own section of its own menu, and calls onSelect
+    // after it has closed the menu and returned the caret to the composer. We
+    // never query or mutate that menu's DOM.
+    //
+    // `items` is synchronous by contract, which is why the locale is warmed at
+    // register() above: a dictionary that is still loading contributes no rows
+    // rather than making the menu wait for a download.
+    ctx.register({
+      id: 'spellcheck-suggestions',
+      area: COMPOSER_AREAS.contextMenu,
+      data: {
+        items: (menu) => prefs.get().enabled ?
+          suggestionItems(menu?.word, activeLocale(prefs.get()), ctx.storage) :
+          []
       }
+    });
 
-      if (!prefs.get().enabled || target.closest('code')) {
-        return;
-      }
-
-      const hit = wordAtCaret();
-
-      if (!hit) {
-        return;
-      }
-
-      const locale = activeLocale(prefs.get());
-      const entry = rankFor(locale);
-
-      // Dictionary still loading: do nothing rather than guess. The app's
-      // menu opens normally and the next right-click will work.
-      if (!entry.ready) {
-        return;
-      }
-
-      if (isKnown(entry, hit.word, locale)) {
-        return; // correctly spelled — the app's menu is exactly right
-      }
-
-      // Deliberately NOT preventDefault/stopPropagation: the app's menu
-      // must open. We decorate it once it exists.
-      const list = suggest(entry, hit.word);
-
-      whenMenuOpen(() =>
-      injectSuggestions(
-        hit.word,
-        list,
-        (chosen) => replaceRange(hit.range, chosen),
-        (word) => {
-          const added = addAllowed(locale, word);
-
-          if (!added) {
-            host.notify({ kind: 'info', message: `“${word}” is already in your custom words` });
-            return;
-          }
-
-          // Tell Chromium too, or the red squiggle stays: the
-          // underline is painted from Chromium's own session
-          // dictionary, so our list alone does not clear it.
-          teachChromosphere(locale, word);
-
-          // Persist BEFORE notifying. `notify` is the SDK's in-app
-          // toast; ctx.notify does not exist and threw, which
-          // silently discarded the word the user just added.
-          saveAllowed(ctx.storage);
-          host.notify({ kind: 'success', message: `Added “${word}” to your custom words` });
-        }
-      )
-      );
-    };
-
-    // ctx.addEventListener, not window/document.addEventListener: bare global
-    // listeners are NOT tracked by the host, so they survive disable and every
-    // hot reload (an ES module cannot be unloaded) and each save stacks another
-    // live copy. The ctx-scoped form is removed with the plugin.
-    ctx.addEventListener(window, 'contextmenu', onContextMenu, true);
-
-    // Re-apply on focus rather than observing document.body: watching app DOM
-    // is a forbidden plugin construct (hermes_cli/plugin_validate_desktop.py).
-    const onFocusIn = () => applySpellcheck(prefs.get());
+    // Re-assert on focus rather than observing document.body (watching app DOM
+    // is a forbidden plugin construct): the host applies setSpellcheck to the
+    // composer that exists when it is called, and focus is the one signal the
+    // plugin already gets when a composer comes into use.
+    const onFocusIn = () => applySpellcheck(prefs.get().enabled);
 
     ctx.addEventListener(document, 'focusin', onFocusIn, true);
 
@@ -52252,19 +52016,13 @@ export default {
 
     ctx.addEventListener(document, 'focusout', onFocusOut, true);
 
-    // Our rows live inside the app's own menu, which closes itself; there is
-    // no separate menu to dismiss on an outside gesture.
-
-    applySpellcheck(prefs.get());
+    applySpellcheck(prefs.get().enabled);
 
     ctx.onDispose(() => {
       // The ctx-scoped listeners above are removed by the host with the
-      // plugin; this only has to undo what we did to the DOM.
-      clearInjected();
-
-      for (const el of document.querySelectorAll(SELECTOR)) {
-        el.spellcheck = false;
-      }
+      // plugin; this only has to undo what we did to the composer. The
+      // contribution and the route go with the registry.
+      applySpellcheck(false);
     });
 
     // Dictionary page: full-pane view + a sidebar tab, mirroring how the
@@ -52345,7 +52103,7 @@ export default {
 
             prefs.set(next);
             ctx.storage.set('prefs', next);
-            applySpellcheck(next);
+            applySpellcheck(next.enabled);
 
             // Turning the code-span mask off must UNDO it — the wrappers are
             // injected into the composer's DOM, and leaving them behind
