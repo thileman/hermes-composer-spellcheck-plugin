@@ -96,6 +96,19 @@ jobs:
             return `/settings?${params}`
           }
           export const useValue = (a) => a.get()
+          export const COMPOSER_AREAS = {
+            top: 'composer.top',
+            bottom: 'composer.bottom',
+            underside: 'composer.underside',
+            leading: 'composer.leading',
+            actions: 'composer.actions',
+            middleware: 'composer.middleware',
+            attachments: 'composer.attachments',
+            microActions: 'composer.microActions',
+            atCompletions: 'composer.atCompletions',
+            modelPill: 'composer.modelPill',
+            contextMenu: 'composer.contextMenu'
+          }
           export const ROUTES_AREA = 'routes'
           export const SIDEBAR_NAV_AREA = 'sidebar-nav'
           EOF

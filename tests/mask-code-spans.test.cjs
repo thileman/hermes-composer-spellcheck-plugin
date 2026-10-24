@@ -92,6 +92,7 @@ const { document } = window
 // Install the globals the extracted code expects.
 const code = `
 const SELECTOR = '[data-slot="composer-rich-input"]';
+${grabStringConst('MASKED_CODE_SELECTOR')}
 ${grabStringConst('FILE_EXT_RE')}
 ${grabConst('CODE_SPLIT_RE')}
 ${grabConst('CODE_SPAN_RE')}

@@ -1,6 +1,13 @@
-// Verify the plugin's editor selectors against the app's REAL markup shape
-// (read from the app source's attributes) — and that they no longer depend
-// on the app's private data-slot names.
+// Verify the plugin's editor selector against the app's REAL markup shape
+// (read from the app source's attributes) — and that it does not depend on the
+// app's private data-slot names.
+//
+// The plugin used to ALSO target the quick-entry <input>, because it wrote
+// `spellcheck` and `lang` onto every element it found. Those writes are gone
+// (the host does it now — see applySpellcheck), so QUICK_ENTRY_SELECTOR is
+// gone too, and this suite asserts that: a re-appearing quick-entry selector
+// would mean the plugin had gone back to writing attributes onto the app's
+// inputs.
 const fs = require('fs')
 const path = require('path')
 const { JSDOM } = require(resolveDep('jsdom'))
@@ -31,15 +38,11 @@ function resolveDep(name) {
 const pluginSource = fs.readFileSync(PLUGIN, 'utf8')
 
 const m = pluginSource.match(/const EDITOR_SELECTOR = '([^']*)'/)
-const q = pluginSource.match(/const QUICK_ENTRY_SELECTOR = '([^']*)'/)
-if (!m || !q) throw new Error('selectors not found in plugin.js')
+if (!m) throw new Error('EDITOR_SELECTOR not found in plugin.js')
 
 const EDITOR_SELECTOR = m[1]
-const QUICK_ENTRY_SELECTOR = q[1]
-const SELECTOR = `${EDITOR_SELECTOR}, ${QUICK_ENTRY_SELECTOR}`
 
-console.log('EDITOR_SELECTOR      :', EDITOR_SELECTOR)
-console.log('QUICK_ENTRY_SELECTOR :', QUICK_ENTRY_SELECTOR)
+console.log('EDITOR_SELECTOR :', EDITOR_SELECTOR)
 console.log()
 
 // The app's real markup, per apps/desktop/src/app/chat/composer/index.tsx
@@ -63,8 +66,6 @@ const dom = new JSDOM(html, { pretendToBeVisual: true })
 const doc = dom.window.document
 
 const editors = doc.querySelectorAll(EDITOR_SELECTOR)
-const quick = doc.querySelectorAll(QUICK_ENTRY_SELECTOR)
-const all = doc.querySelectorAll(SELECTOR)
 
 let fails = 0
 const check = (label, actual, expected) => {
@@ -78,16 +79,25 @@ check('both contentEditable role=textbox divs', editors.length, 2)
 check('they are the composer + message editor', [...editors].every(e => e.getAttribute('contenteditable') === 'true'), true)
 check('it does NOT match a role=textbox without contentEditable', [...editors].some(e => e.getAttribute('data-testid')), false)
 
-console.log('\n=== the quick-entry selector finds the inputs ===')
-check('both inputs', quick.length, 2)
+console.log('\n=== it does NOT reach the quick-entry inputs ===')
+check('no <input> matches', doc.querySelectorAll('input').length, 2)
+check('the selector does not contain "input"', EDITOR_SELECTOR.includes('input'), false)
 
-console.log('\n=== the combined selector ===')
-check('4 elements total', all.length, 4)
+console.log('\n=== SELECTOR is the editor selector, and nothing else ===')
+check('SELECTOR is assigned from EDITOR_SELECTOR', /const SELECTOR = EDITOR_SELECTOR;/.test(pluginSource), true)
+check('QUICK_ENTRY_SELECTOR is gone', pluginSource.includes('QUICK_ENTRY_SELECTOR'), false)
 
 console.log('\n=== the old data-slot selector is gone ===')
 check('no data-slot in EDITOR_SELECTOR', EDITOR_SELECTOR.includes('data-slot'), false)
-check('no data-slot in QUICK_ENTRY_SELECTOR', QUICK_ENTRY_SELECTOR.includes('data-slot'), false)
-check('no placeholder copy in the selectors', QUICK_ENTRY_SELECTOR.includes('Ask Hermes'), false)
+check('no placeholder copy in the selector', EDITOR_SELECTOR.includes('Ask Hermes'), false)
+
+console.log('\n=== the plugin writes no spellcheck/lang attributes onto app elements ===')
+// `el.spellcheck = ...` / `el.lang = ...` are the DOM reach this refactor
+// removed; the only remaining `spellcheck` write is on the plugin's OWN
+// <code> wrappers in maskCodeSpans, which it creates itself.
+check('no "el.spellcheck =" write', /el\.spellcheck\s*=/.test(pluginSource), false)
+check('no "el.lang =" write', /el\.lang\s*=/.test(pluginSource), false)
+check('the host seam is called instead', pluginSource.includes('setSpellcheck'), true)
 
 console.log(fails === 0 ? '\nALL CHECKS PASSED' : `\n${fails} CHECK(S) FAILED`)
 process.exit(fails ? 1 : 0)
