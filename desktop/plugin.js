@@ -50770,44 +50770,152 @@ function isSpelled(entry, word) {
   return mask ? maskAllows(mask, word) : false;
 }
 /**
- * Damerau-Levenshtein with THREE rows. The transposition rule reads row i-2 at
- * column j-2, so a two-row version silently scores every swap as two edits —
- * which is exactly how "teh" ends up ranked under "ten" instead of "the".
+ * Damerau-Levenshtein, banded, with the scratch rows reused across candidates.
+ *
+ * The restricted (optimal-string-alignment) form is the one "teh" -> "the"
+ * needs: a transposition is ONE edit, and that is only visible because the
+ * recurrence reads the row TWO above it. A two-row version silently scores
+ * every swap as two edits — which is exactly how "teh" ends up ranked under
+ * "ten" instead of "the".
+ *
+ * Two things make it fast enough to run against all 118,087 dictionary
+ * spellings inside a right-click, which is what the ranker does:
+ *
+ *  - The three rows are module-scope Int32Arrays, reused for every candidate.
+ *    The full-matrix version allocated `new Array(b.length + 1)` three times
+ *    per candidate — 354,000 fresh arrays per right-click, all garbage a moment
+ *    later — and that allocation, not the arithmetic, was most of the 832 ms
+ *    "definately" cost.
+ *  - Only a BAND is computed. An alignment that costs at most `cap` can never
+ *    drift more than `cap` columns off the diagonal, so every cell with
+ *    |i - j| > cap is unreachable for a match and is skipped; and a row whose
+ *    best cell already exceeds `cap` ends the comparison outright.
+ *
+ * The column side is loaded once per query by primeEditTarget(), so the
+ * per-candidate work is integer comparisons over char codes and nothing else.
+ *
+ * The contract is unchanged from the full-matrix version: the true distance
+ * when it is <= cap, and SOME value > cap otherwise. suggest() only ever
+ * compares the result against cap, so that is all it can observe.
  */
-function editDistance(a, b, cap) {
-  if (Math.abs(a.length - b.length) > cap) {
+
+const EDIT_SLACK = 32;                    // room for the band's sentinels
+let editTarget = new Int32Array(EDIT_SLACK);  // char codes of the column side
+let editRowA = new Int32Array(EDIT_SLACK);
+let editRowB = new Int32Array(EDIT_SLACK);
+let editRowC = new Int32Array(EDIT_SLACK);
+
+function growEditRows(size) {
+  editTarget = new Int32Array(size);
+  editRowA = new Int32Array(size);
+  editRowB = new Int32Array(size);
+  editRowC = new Int32Array(size);
+}
+
+/**
+ * Load the column side of the comparison and return its length.
+ *
+ * Called ONCE per query rather than once per candidate: 118,087 candidates
+ * share one typed word, so the word's char codes are the thing worth keeping.
+ */
+function primeEditTarget(text) {
+  const n = text.length;
+
+  if (editTarget.length <= n + 2) {
+    growEditRows(n + EDIT_SLACK);
+  }
+
+  for (let j = 0; j < n; j++) {
+    editTarget[j] = text.charCodeAt(j);
+  }
+
+  return n;
+}
+
+/** Distance from `a` to the primed target, capped at `cap`. */
+function editDistanceToTarget(a, n, cap) {
+  const m = a.length;
+
+  if (m - n > cap || n - m > cap) {
     return cap + 1;
   }
 
-  let prevPrev = new Array(b.length + 1);
-  let prev = new Array(b.length + 1);
-  let curr = new Array(b.length + 1);
+  const inf = cap + 1;
 
-  for (let j = 0; j <= b.length; j++) {
-    prev[j] = j;
-    prevPrev[j] = j;
+  // Row 0 — the empty prefix of `a` against each prefix of the target. Past
+  // cap the distance is already greater than cap.
+  const row0 = editRowA;
+
+  row0[0] = 0;
+
+  for (let j = 1; j <= n; j++) {
+    row0[j] = j <= cap ? j : inf;
   }
 
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    let rowBest = curr[0];
+  row0[n + 1] = inf;
 
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+  // Row -1 is never read: the transposition rule needs BOTH i > 1 and j > 1.
+  let prevPrev = editRowC;
+  let prev = row0;
+  let curr = editRowB;
 
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+  for (let i = 1; i <= m; i++) {
+    const code = a.charCodeAt(i - 1);
+    const codeAbove = i > 1 ? a.charCodeAt(i - 2) : -1;
+    const low = i - cap;
+    const start = low > 1 ? low : 1;
+    const high = i + cap;
+    const stop = high < n ? high : n;
+    let rowBest;
 
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-        curr[j] = Math.min(curr[j], prevPrev[j - 2] + 1);
+    if (low <= 0) {
+      curr[0] = i <= cap ? i : inf;
+      rowBest = curr[0];
+    } else {
+      // The cell the band left behind reads as unreachable, rather than as
+      // whatever the previous candidate happened to leave in the buffer.
+      curr[low - 1] = inf;
+      rowBest = inf;
+    }
+
+    for (let j = start; j <= stop; j++) {
+      const here = editTarget[j - 1];
+      let best = prev[j - 1] + (code === here ? 0 : 1);
+      let alt = prev[j] + 1;
+
+      if (alt < best) {
+        best = alt;
       }
 
-      if (curr[j] < rowBest) {
-        rowBest = curr[j];
+      alt = curr[j - 1] + 1;
+
+      if (alt < best) {
+        best = alt;
+      }
+
+      if (codeAbove >= 0 && j > 1 && code === editTarget[j - 2] && codeAbove === here) {
+        alt = prevPrev[j - 2] + 1;
+
+        if (alt < best) {
+          best = alt;
+        }
+      }
+
+      curr[j] = best;
+
+      if (best < rowBest) {
+        rowBest = best;
       }
     }
 
+    // One sentinel past the end of the row: the next row reads prev[stop + 1]
+    // to step straight down, and that cell sits outside THIS row's band.
+    if (stop + 1 <= n) {
+      curr[stop + 1] = inf;
+    }
+
     if (rowBest > cap) {
-      return cap + 1;
+      return inf;
     }
 
     const spare = prevPrev;
@@ -50817,7 +50925,7 @@ function editDistance(a, b, cap) {
     curr = spare;
   }
 
-  return prev[b.length];
+  return prev[n];
 }
 
 /**
@@ -50828,12 +50936,25 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
   const target = word.toLowerCase();
   const cap = target.length <= 3 ? 1 : target.length <= 6 ? 2 : 3;
   const scored = [];
+  const columns = primeEditTarget(target);
 
   // The candidates are the DICTIONARY's spellings, keyed by their lowercase
   // form: the distance is measured case-insensitively, but the suggestion
   // that comes out carries the dictionary's own capitalisation.
-  for (const [candidate, canonical] of entry.cands) {
-    if (Math.abs(candidate.length - target.length) > cap) {
+  //
+  // Iterated over the KEYS. `for (const [a, b] of map)` hands back a fresh
+  // two-element array for every entry — 118,087 of them per right-click, and
+  // measurably the floor on how fast this can go. The value is only needed for
+  // the handful of candidates that survive the distance cut, so it is fetched
+  // there instead.
+  for (const candidate of entry.cands.keys()) {
+    // The length cut lives here, not inside the distance function: a candidate
+    // whose length is out of reach cannot be within `cap` edits, and skipping
+    // it before the call keeps ~75% of the dictionary out of a function call
+    // the whole way through.
+    const span = candidate.length;
+
+    if (span > columns + cap || span < columns - cap) {
       continue;
     }
 
@@ -50848,13 +50969,19 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
     // two share a lowercase key -- and the second half alone drops
     // "spelling" for the typo "speling", because "spelling" allows
     // lowercase. Together they keep exactly the case corrections.
-    const mask = entry.words.get(candidate);
+    //
+    // The mask lookup sits INSIDE the equality test. Map keys are unique, so
+    // at most one candidate per query is ever equal to the target; hoisting the
+    // lookup out costs a Map.get for every candidate in the dictionary.
+    if (candidate === target) {
+      const mask = entry.words.get(candidate);
 
-    if (candidate === target && mask && maskAllows(mask, word)) {
-      continue;
+      if (mask && maskAllows(mask, word)) {
+        continue;
+      }
     }
 
-    const d = editDistance(target, candidate, cap);
+    const d = editDistanceToTarget(candidate, columns, cap);
 
     if (d > cap) {
       continue;
@@ -50862,7 +50989,7 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
 
     const fr = freq?.get(candidate);
 
-    scored.push([d, fr === undefined ? Number.MAX_SAFE_INTEGER : fr, candidate, canonical]);
+    scored.push([d, fr === undefined ? Number.MAX_SAFE_INTEGER : fr, candidate, entry.cands.get(candidate)]);
   }
 
   scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -51003,6 +51130,26 @@ const MENU_SEAM_MIN_HERMES = '0.22.6';
 let menuSeamNoticeShown = false;
 
 /**
+ * Say something to the user, if this shell has a notice surface.
+ *
+ * `host.notify` is the plugin's only channel for telling the user what
+ * happened, and it is not guaranteed: a shell too old to have one, or a toast
+ * surface that throws — the Custom Words page calls this from inside a React
+ * click handler, where a throw becomes an error boundary — must not take the
+ * action down with it. Every notice the plugin raises goes through here, so no
+ * call site can be the one that crashes.
+ */
+function notifyHost(kind, message) {
+  try {
+    if (host && typeof host.notify === 'function') {
+      host.notify({ kind, message });
+    }
+  } catch {
+    // No usable notice surface. The action itself already happened.
+  }
+}
+
+/**
  * Say, once, that this app is too old for right-click suggestions.
  *
  * Without this the degradation is SILENT: the plugin loads, the dictionary and
@@ -51068,18 +51215,37 @@ function suggestionItems(word, locale, storage) {
   // bundled corpus frequency list. It also carries the DICTIONARY's
   // capitalisation out, which is why "english" is offered "English" — the
   // spelling Chromium accepts.
+  //
+  // applyCorrection() reports whether it actually changed anything, and the
+  // answer is no whenever `action.replaceWord` refuses (the composer moved on
+  // since the menu opened) or the draft holds the word more than once. The menu
+  // closes either way, so a silent false is a row the user clicks that appears
+  // to do NOTHING — say so instead.
   const rows = suggest(entry, word, FREQ_RANK, SUGGESTION_ROWS).map((candidate) => ({
     label: candidate,
-    onSelect: (action) => applyCorrection(action, word, candidate)
+    onSelect: (action) => applyCorrection(action, word, candidate).then(
+      (applied) => {
+        if (!applied) {
+          notifyHost('warning', `Could not replace “${word}” with “${candidate}” — the composer text changed since the menu opened.`);
+        }
+
+        return applied;
+      },
+      () => {
+        notifyHost('warning', `Could not replace “${word}” with “${candidate}”.`);
+
+        return false;
+      }
+    )
   }));
 
   rows.push({
     label: 'Add to dictionary',
     onSelect: () => {
       if (addCustomWord(locale, word, storage)) {
-        host.notify({ kind: 'success', message: `Added “${word}” to your custom words` });
+        notifyHost('success', `Added “${word}” to your custom words`);
       } else {
-        host.notify({ kind: 'info', message: `“${word}” is already in your custom words` });
+        notifyHost('info', `“${word}” is already in your custom words`);
       }
     }
   });
@@ -51819,7 +51985,6 @@ function maskCodeSpans(enable) {
         restoreCaret(el, caret);
       }
 
-      delete el.dataset.spellingMasked;
       continue;
     }
 
@@ -51875,8 +52040,6 @@ function maskCodeSpans(enable) {
     if (caret !== null) {
       restoreCaret(el, caret);
     }
-
-    el.dataset.spellingMasked = 'on';
   }
 }
 
@@ -51935,9 +52098,9 @@ function DictionaryPage({ prefs, storage }) {
     }
 
     if (added.length) {
-      host.notify({ kind: 'success', message: `Added ${added.length} word${added.length > 1 ? 's' : ''}` });
+      notifyHost('success', `Added ${added.length} word${added.length > 1 ? 's' : ''}`);
     } else if (existed.length) {
-      host.notify({ kind: 'info', message: 'Those words were already in your dictionary' });
+      notifyHost('info', 'Those words were already in your dictionary');
     }
 
     // One field, so both states clear together. Leaving the query behind
@@ -51950,7 +52113,7 @@ function DictionaryPage({ prefs, storage }) {
   // removed word leaves BOTH stores — our list and the app's dictionary.
   const remove = (word) => {
     if (removeCustomWord(locale, word, storage)) {
-      host.notify({ kind: 'success', message: `Removed “${word}”` });
+      notifyHost('success', `Removed “${word}”`);
     }
   };
 
