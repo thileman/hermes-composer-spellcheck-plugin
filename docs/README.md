@@ -6,7 +6,8 @@ that changes the UI, and say in the PR description what each one shows.
 | file | shows |
 |---|---|
 | `banner.png` | the catalog banner: the right-click suggestion menu over the composer |
-| `context-menu.png` | the right-click suggestion menu inside the composer's own context menu |
+| `context-menu.png` | the right-click suggestion menu in the composer, with the app around it |
+| `suggestion-rows.png` | the suggestion rows close up |
 | `custom-words.png` | the Custom Words page with the search field and the word list |
 | `settings.png` | Settings → Plugins → Composer Spell Check |
 
@@ -24,4 +25,5 @@ underline is Chromium's, painted only when the app exposes
 `host.composer.setSpellcheck` — an upstream PR that is in no release — so on a
 released build there is no squiggle, and a shot that shows one is promising
 something a user cannot yet get. The suggestions themselves work either way:
-the plugin ranks them from its own dictionary.
+the plugin ranks them from its own dictionary. The shipped shots are of a build
+with no squiggle, which is what a user has today.
