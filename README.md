@@ -117,7 +117,10 @@ data or asks for an effect; the app performs it.
   the old DOM injection and private bridge are gone. The one thing it reads
   back is its own `code[data-sp-mask]` wrapper: if the caret sits inside one,
   it contributes no rows, so a right-click in a masked code span offers no
-  spellings for code.
+  spellings for code. On a Hermes too old to have that seam, the plugin still
+  loads and its Custom Words page and dictionary work, but the right-click
+  suggestions are unavailable — and it says so once, rather than silently
+  contributing rows to an area nothing renders.
 - **The dictionary is the app's.** `host.spellcheck.addWord` /
   `removeWord`, and the two are now symmetric: a word added from the menu stops
   being flagged, and a word deleted on the Custom Words page is flagged again.

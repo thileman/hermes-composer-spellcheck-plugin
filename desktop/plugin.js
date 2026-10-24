@@ -50967,6 +50967,67 @@ function caretInMaskedCode() {
 }
 
 /**
+ * The `composer.contextMenu` contribution area, or null when this shell has
+ * no such seam.
+ *
+ * `COMPOSER_AREAS` shipped with ten keys for a long time before upstream added
+ * `contextMenu`, so an older app reaches `register()` with the key ABSENT and
+ * `COMPOSER_AREAS.contextMenu === undefined`. Registering against undefined
+ * would file a contribution into an area the app never resolves — the menu
+ * would simply never ask for rows, which looks exactly like a broken plugin.
+ *
+ * Detected on the SEAM, deliberately, not on the host's version: a dev build
+ * can carry `contextMenu` without a matching release number, and a release
+ * number says nothing about whether the export has the key. `plugin.yaml`'s
+ * `requires_hermes` is a separate, load-blocking gate the Python loader
+ * applies; this is the runtime check for a plugin that is already loaded.
+ */
+function composerMenuArea() {
+  return COMPOSER_AREAS && COMPOSER_AREAS.contextMenu ? COMPOSER_AREAS.contextMenu : null;
+}
+
+/**
+ * The oldest app release whose SDK carries the `composer.contextMenu` seam.
+ *
+ * Used ONLY to word the one-time notice below — never to decide whether the
+ * seam is there, which `composerMenuArea()` answers by looking at the export.
+ * It mirrors `plugin.yaml`'s `requires_hermes`, so keep the two in step.
+ */
+const MENU_SEAM_MIN_HERMES = '0.22.6';
+
+/** Set once the user has been told the menu seam is missing, so only once. */
+let menuSeamNoticeShown = false;
+
+/**
+ * Say, once, that this app is too old for right-click suggestions.
+ *
+ * Without this the degradation is SILENT: the plugin loads, the dictionary and
+ * the Custom Words page work, and the only symptom is a menu that never offers
+ * a spelling. A shell that cannot show a notice (or has no `notify`) must
+ * still load the plugin, so the call is guarded.
+ */
+function noticeMenuSeamMissing() {
+  if (menuSeamNoticeShown) {
+    return;
+  }
+
+  menuSeamNoticeShown = true;
+
+  try {
+    if (host && typeof host.notify === 'function') {
+      host.notify({
+        kind: 'info',
+        message: 'Right-click suggestions need Hermes ' + MENU_SEAM_MIN_HERMES +
+        ' or newer — this app is too old to have the composer menu they attach ' +
+        'to. Your dictionary and Custom Words page still work.'
+      });
+    }
+  } catch {
+    // No notice surface here: the rest of the plugin still works.
+  }
+}
+
+/**
  * The rows this plugin contributes for the right-clicked word.
  *
  * `[]` for a word that is spelled correctly, or one the plugin cannot judge
@@ -52058,15 +52119,26 @@ export default {
     // `items` is synchronous by contract, which is why the locale is warmed at
     // register() above: a dictionary that is still loading contributes no rows
     // rather than making the menu wait for a download.
-    ctx.register({
-      id: 'spellcheck-suggestions',
-      area: COMPOSER_AREAS.contextMenu,
-      data: {
-        items: (menu) => prefs.get().enabled ?
-          suggestionItems(menu?.word, activeLocale(prefs.get()), ctx.storage) :
-          []
-      }
-    });
+    //
+    // The area is FEATURE-DETECTED. An older shell's `COMPOSER_AREAS` has no
+    // `contextMenu` key, and registering against `undefined` would either file
+    // the contribution into an area nothing resolves or throw — so the menu is
+    // skipped, the user is told once, and everything else registers as usual.
+    const menuArea = composerMenuArea();
+
+    if (menuArea) {
+      ctx.register({
+        id: 'spellcheck-suggestions',
+        area: menuArea,
+        data: {
+          items: (menu) => prefs.get().enabled ?
+            suggestionItems(menu?.word, activeLocale(prefs.get()), ctx.storage) :
+            []
+        }
+      });
+    } else {
+      noticeMenuSeamMissing();
+    }
 
     // Re-assert on focus rather than observing document.body (watching app DOM
     // is a forbidden plugin construct): the host applies setSpellcheck to the
