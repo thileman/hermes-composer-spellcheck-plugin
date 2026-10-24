@@ -147,10 +147,12 @@ installing it. This plugin:
 
   **When it fetches.** The **Language** setting defaults to **Automatic**,
   which follows the app's language, and the active locale is loaded once as
-  the plugin registers — not lazily on the first right-click. So a user whose
-  *app* language maps to a non-English dictionary (German, French, Chinese, …)
-  fetches on first run without ever changing the plugin's setting. Changing
-  **Language** re-fetches for the new locale. An app language the plugin has
+  the plugin registers — not lazily on the first right-click. The locale is
+  resolved from the composer's own `lang`, then the document's language, then
+  the browser's (`navigator.language`), so a user whose *app or OS* language
+  maps to a non-English dictionary (German, French, Chinese, …) fetches on
+  first run without ever changing the plugin's setting. Changing
+  **Language** re-fetches for the new locale. A locale the plugin has
   no dictionary for (Japanese, say) resolves to the embedded English list and
   fetches nothing.
 
