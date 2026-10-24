@@ -264,6 +264,8 @@ None of them raise an error at build time.
 | `tests/dictionary-seam.test.cjs` | add calls `host.spellcheck.addWord` **and** records the word in storage; remove (through the Custom Words page's own button) calls `removeWord` **and** drops it — the two stores move together |
 | `tests/correction-seam.test.cjs` | a correction goes through `action.replaceWord`, or `host.composer.getDraft`/`setDraft` when there is no action — never `execCommand`/`insertNode`, and an ambiguous word is left alone |
 | `tests/defined-symbols.test.cjs` | no function that existed in the first commit is called without being defined (three helpers were lost this way) |
+| `tests/ranking-stability.test.cjs` | the suggestion ranker's output is frozen: 60 recorded lists come back byte for byte, a verbatim copy of the pre-rewrite algorithm re-derives them from the same dictionary, the capitalisation rules hold, the menu still caps at six rows — and a ten-letter typo ranks in under 50 ms (the pre-rewrite ranker took 871 ms, and the app ranks inside a `useMemo` during render, so that was a frozen menu) |
+| `tests/menu-failure-reporting.test.cjs` | a correction that could not be applied now says so instead of closing the menu silently; a `host.notify` that throws (or is missing) never escapes the plugin; and nothing is written onto the composer for the plugin's own bookkeeping any more |
 
 ### Checks
 
