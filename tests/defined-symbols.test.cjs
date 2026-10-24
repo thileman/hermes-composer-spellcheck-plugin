@@ -3,6 +3,9 @@
 // Three separate helpers were lost during large edits -- clearInjected,
 // wordAtCaret and isKnown -- and every one of them broke a feature at
 // RUNTIME while the file still parsed and the other tests still passed.
+// (clearInjected and wordAtCaret have since been removed ON PURPOSE, with the
+// DOM injection they served; the checks below assert they are gone rather than
+// defined, and that the seams that replaced them are present.)
 // A missing function is invisible to `node --check`: a call to an
 // undefined name is a runtime ReferenceError, not a syntax error.
 //
@@ -157,10 +160,19 @@ if (!original) {
     for (const n of missing) console.log('      MISSING: ' + n)
   }
 
-  // The three that were actually lost, named explicitly so a regression
-  // cannot hide behind a rename.
-  for (const name of ['clearInjected', 'wordAtCaret', 'isKnown']) {
+  // Named explicitly so a regression cannot hide behind a rename. The first
+  // two were lost in an edit and broke the right-click path; isKnown is the
+  // recognition check the suggestion seam calls every time the menu opens.
+  for (const name of ['isKnown', 'suggest', 'applySpellcheck']) {
     check('"' + name + '" is defined', nowDefs.has(name), true)
+  }
+
+  // The inverse, now that the DOM injection is gone. Re-introducing any of
+  // these would mean the plugin had gone back to decorating the app's own
+  // menu by hand, which is the thing the SDK contribution replaced.
+  for (const name of ['injectSuggestions', 'clearInjected', 'wordAtCaret',
+    'wireKeyboard', 'whenMenuOpen', 'closeAppMenu', 'replaceRange', 'teachChromosphere']) {
+    check('"' + name + '" is NOT defined', nowDefs.has(name), false)
   }
 
   // The imports the SDK provides must still be imported the same way, or

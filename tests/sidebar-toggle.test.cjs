@@ -102,6 +102,8 @@ const SDK = {
   SearchField: 'SearchField',
   host: { notify() {}, navigate() {} },
   useValue: a => a.get(),
+  // The composer context-menu area id, as the SDK exports it.
+  COMPOSER_AREAS: { contextMenu: 'composer.contextMenu' },
   ROUTES_AREA: 'routes',
   SIDEBAR_NAV_AREA: 'sidebar-nav'
 }
