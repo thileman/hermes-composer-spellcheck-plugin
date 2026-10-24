@@ -50991,7 +50991,11 @@ function composerMenuArea() {
  *
  * Used ONLY to word the one-time notice below — never to decide whether the
  * seam is there, which `composerMenuArea()` answers by looking at the export.
- * It mirrors `plugin.yaml`'s `requires_hermes`, so keep the two in step.
+ *
+ * This names the release that will first CARRY the seam, so it is not the same
+ * thing as `plugin.yaml`'s `requires_hermes`: that floor is lower on purpose,
+ * because an older host loads this plugin and loses only the menu rows, with a
+ * notice, instead of being refused at install time. Do not "sync" the two.
  */
 const MENU_SEAM_MIN_HERMES = '0.22.6';
 

@@ -1,6 +1,6 @@
 name: hermes-composer-spellcheck-plugin
 version: 1.0.0
-description: "Spell check for the Hermes Desktop composer: right-click suggestions ranked with Damerau-Levenshtein over the standard SCOWL/Hunspell English dictionary, a Custom Words page for the words you add, and the dictionary's capitalisation kept, so a lowercase proper noun such as 'english' is flagged and the suggestion offered is the capitalised 'English'; the red underline is enabled only when the app exposes host.composer.setSpellcheck, and without it the suggestions work while Chromium's underline stays off - deliberately with no DOM-attribute fallback."
+description: "Spell check for the Hermes Desktop composer: right-click suggestions ranked with Damerau-Levenshtein over the standard SCOWL/Hunspell English dictionary, a Custom Words page for the words you add, and the dictionary's capitalisation kept, so a lowercase proper noun such as 'english' is flagged and the suggestion offered is the capitalised 'English'; the suggestions are rows in the app's own composer context menu, a seam that upstream merged on 2026-10-23 (#143678) and that is in no release yet, so they need a newer Hermes than 0.22.5 - on 0.22.5 the plugin still loads and the dictionary and Custom Words page work, but there are no right-click suggestions and it says so once instead of being refused; the red underline is enabled only when the app exposes host.composer.setSpellcheck, which is in an open upstream PR and is in no release yet, and without it the suggestions work while Chromium's underline stays off - deliberately with no DOM-attribute fallback."
 author: thileman
 license: MIT
 kind: standalone
@@ -14,4 +14,4 @@ tags:
   - spelling
   - dictionary
   - composer
-requires_hermes: ">=0.22.6"
+requires_hermes: ">=0.22.5"

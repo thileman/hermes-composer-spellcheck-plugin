@@ -12,10 +12,11 @@ cannot provide: a working suggestion menu.
 ## What it does
 
 - **Turns the squiggles on** in the composer and the message-edit composer —
-  but only when the app exposes `host.composer.setSpellcheck`, which ships in an
-  unreleased upstream version. Without it the plugin leaves Chromium's spell check
-  off (deliberately, with no DOM-attribute fallback) and the squiggles stay away;
-  the suggestions below work either way.
+  but only when the app exposes `host.composer.setSpellcheck`, which is in an
+  open upstream PR and is in no release yet. Without it the plugin leaves
+  Chromium's spell check off (deliberately, with no DOM-attribute fallback) and
+  the squiggles stay away; the suggestions below work either way, though they
+  need the menu seam described under [Install](#install).
 - **Adds a right-click suggestion menu** with ranked alternatives,
   contributed to the app's *own* context menu — the app renders it as its own
   section, between its spell-check rows and Cut/Copy/Paste/Select All, so
@@ -54,6 +55,13 @@ $HERMES_HOME/desktop-plugins/hermes-composer-spellcheck-plugin/plugin.js
 
 Then press `⌘K` → **Reload desktop plugins**. The plugin appears in
 **Capabilities → Plugins**, where you can turn it off.
+
+`requires_hermes` is `>=0.22.5`. On 0.22.5 the plugin loads and the dictionary
+and the Custom Words page work; the right-click suggestions need a release that
+carries the `COMPOSER_AREAS.contextMenu` seam — merged upstream
+([#143678](https://github.com/NousResearch/hermes-agent/pull/143678)) and
+unreleased — so on 0.22.5 only the menu rows and the underline are missing, and
+the plugin says so once.
 
 ## Using it
 
@@ -117,10 +125,11 @@ data or asks for an effect; the app performs it.
   the old DOM injection and private bridge are gone. The one thing it reads
   back is its own `code[data-sp-mask]` wrapper: if the caret sits inside one,
   it contributes no rows, so a right-click in a masked code span offers no
-  spellings for code. On a Hermes too old to have that seam, the plugin still
-  loads and its Custom Words page and dictionary work, but the right-click
-  suggestions are unavailable — and it says so once, rather than silently
-  contributing rows to an area nothing renders.
+  spellings for code. On a Hermes too old to have that seam — 0.22.5 is the
+  oldest release this plugin loads on, and it has no `contextMenu` area — the
+  plugin still loads and its Custom Words page and dictionary work, but the
+  right-click suggestions are unavailable, and it says so once rather than
+  silently contributing rows to an area nothing renders.
 - **The dictionary is the app's.** `host.spellcheck.addWord` /
   `removeWord`, and the two are now symmetric: a word added from the menu stops
   being flagged, and a word deleted on the Custom Words page is flagged again.
@@ -195,14 +204,17 @@ installing it. This plugin:
 
 ### The `setSpellcheck` trade-off
 
-`host.composer.setSpellcheck` is newer than the released SDK, so the plugin
+`host.composer.setSpellcheck` is in no released SDK yet, so the plugin
 feature-detects it. When it is absent there is deliberately **no DOM
 fallback**: the composer keeps the app's default (Chromium's spell check off,
 so no red squiggles), and everything else keeps working. The plugin computes
 and ranks its own suggestions from its own dictionary, so right-clicking a
 misspelling still offers the right corrections and applies them — Chromium
-only paints the underline. When the API lands, the squiggles light up with no
-further change here.
+only paints the underline. `plugin.yaml`'s floor is `>=0.22.5`: a 0.22.5 host
+has neither this seam nor `COMPOSER_AREAS.contextMenu`, so what it gets is the
+dictionary and the Custom Words page, and neither the squiggles nor the
+right-click rows; when the API lands, the squiggles light up with no further
+change here.
 
 ## Development
 
@@ -246,6 +258,7 @@ None of them raise an error at build time.
 | `tests/settings-render.test.cjs` | the settings page renders in a real React DOM, so a row React refuses to render fails the build |
 | `tests/dictionary-case.test.cjs` | the dictionary keeps its capitalisation: `Hermes` is a word, `hermes` is not, and a typo offers the spelling the dictionary actually holds |
 | `tests/menu-case.test.cjs` | the context-menu contribution: `data.items()` returns the right rows (right-click `english` → **English** first), a correctly spelled word returns none, and `onSelect` calls `action.replaceWord`; also that the old DOM injection and private bridge are gone |
+| `tests/menu-seam-absence.test.cjs` | the menu seam is feature-detected, not version-gated: with `COMPOSER_AREAS.contextMenu` present the rows register; without it the plugin still loads, registers nothing for the menu, shows exactly one info notice naming the minimum version, and its dictionary and Custom Words page keep working |
 | `tests/dictionary-seam.test.cjs` | add calls `host.spellcheck.addWord` **and** records the word in storage; remove (through the Custom Words page's own button) calls `removeWord` **and** drops it — the two stores move together |
 | `tests/correction-seam.test.cjs` | a correction goes through `action.replaceWord`, or `host.composer.getDraft`/`setDraft` when there is no action — never `execCommand`/`insertNode`, and an ambiguous word is left alone |
 | `tests/defined-symbols.test.cjs` | no function that existed in the first commit is called without being defined (three helpers were lost this way) |
