@@ -77,9 +77,10 @@ squiggle goes away immediately and the word is saved.
 **Manage your words.** Open **Settings → Plugins → Composer Spell Check →
 Custom Words**, or click **Spellcheck** in the sidebar if you left that row
 showing. There you can search your words, add more (one at a time, or several
-comma-separated), and delete any you have added by mistake. The search
-filters as you type: `o` narrows to every word starting with *o*, `op`
-narrows further, and so on.
+comma-separated), and delete any you have added by mistake. The search filters
+as you type: `op` narrows to every word starting with *op*, and a query that is
+not a prefix (`code`) still matches anywhere in the word, because that is what
+people expect from a search box. Matching is case-insensitive.
 
 **Settings.**
 
@@ -118,10 +119,11 @@ Each app-owned concern goes through a supported seam. The plugin contributes
 data or asks for an effect; the app performs it.
 
 - **The menu is a contribution, not an injection.** One `ctx.register` with
-  `area: COMPOSER_AREAS.contextMenu` and `data: { items, onSelect }`. The app
+  `area: COMPOSER_AREAS.contextMenu` and `data: { items }` — `items(context)`
+  returns the rows, and each row carries its own `label` and `onSelect`. The app
   asks for rows when it opens the composer's menu, renders them as its own
   section, orders them, caps the count, closes the menu and restores the caret
-  before it calls `onSelect`. The plugin never queries or mutates that menu;
+  before it calls each row's `onSelect`. The plugin never queries or mutates that menu;
   the old DOM injection and private bridge are gone. The one thing it reads
   back is its own `code[data-sp-mask]` wrapper: if the caret sits inside one,
   it contributes no rows, so a right-click in a masked code span offers no
