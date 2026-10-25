@@ -103,7 +103,8 @@ const SDK = {
   }
 }
 
-// No caret anywhere: `caretInMaskedCode()` must fall through to "offer rows".
+// Nothing here reads the caret or any element: suggestionItems() ranks from the
+// word alone and the menu offers rows.
 const sandbox = {
   console,
   __SDK__: SDK,

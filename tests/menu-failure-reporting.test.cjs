@@ -315,11 +315,12 @@ async function main() {
 
     const code = stripLiteralsAndComments(source)
 
-    // Removing the bookkeeping attribute must not have removed the masking it
-    // was bookkeeping FOR: the wrapper attribute is still applied.
-    check('masking still marks its code spans', code.includes('spMask'), true)
-    check('and still writes no other data-* on the editor root',
-      /dataset\.(spellingMasked|spellcheckMasked)/.test(code), false)
+    // The masking this attribute was bookkeeping FOR is gone altogether — the
+    // maintainer asked for it, see no-code-masking.test.cjs. What must still
+    // hold, and is what this section is about, is that the plugin writes no
+    // data-* marker of its own onto an element of the app's.
+    check('no data-* marker is written onto an app element',
+      /dataset\.(spellingMasked|spellcheckMasked|spMask)/.test(code), false)
   }
 
   console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)

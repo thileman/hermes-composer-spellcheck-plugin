@@ -53,41 +53,10 @@ import { jsx, jsxs } from 'react/jsx-runtime';
 
 const ID = 'hermes-composer-spellcheck-plugin';
 
-/** Main composer + message editor share this slot. */
-/**
- * The composer's editable element.
- *
- * Selected by ROLE, not by the app's internal markup: the Desktop Plugin
- * SDK forbids "reaching into the app's ... own markup (querying data-slot /
- * data-tour / data-sidebar / data-testid elements from document ... to
- * restyle, hide, click or rewrite core UI)", and a plugin that needs a
- * capability the SDK lacks should ask for a hook rather than patch around
- * it.
- *
- * The composer's editable div carries role="textbox" and an aria-label — public
- * accessibility attributes that mean the same thing to assistive tech and to
- * us. The selector does not depend on the app's private slot names, so it
- * survives a markup change that a data-slot query would not.
- *
- * The quick-entry <input> used to be listed here too, because the plugin
- * wrote `spellcheck`/`lang` onto it. It no longer touches either attribute on
- * any element (see applySpellcheck), so there is nothing left to find there.
- */
-const EDITOR_SELECTOR = '[role="textbox"][contenteditable="true"], [role="textbox"][contenteditable=""], [role="textbox"][contenteditable="plaintext-only"]';
-const SELECTOR = EDITOR_SELECTOR;
-
-/**
- * This plugin's OWN marker around a masked code span.
- *
- * Written by maskCodeSpans and by nothing else in the app, so matching it is
- * not app-DOM reach: it is the plugin reading back the wrapper it created.
- */
-const MASKED_CODE_SELECTOR = 'code[data-sp-mask]';
 
 const DEFAULTS = {
   enabled: true,
   language: 'auto',
-  excludeCodeSpans: false,
   // Whether the sidebar shows a Spellcheck row. The Custom Words PAGE is
   // always reachable from Settings -> Plugins whether this is on or off.
   showSidebarTab: true
@@ -51053,59 +51022,6 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
 const SUGGESTION_ROWS = 5;
 
 /**
- * Is the caret sitting inside one of this plugin's masked code spans?
- *
- * The plugin used to answer this from the pointer event itself:
- * `target.closest('code')` in its own `onContextMenu`. The SDK's
- * `ComposerContextMenuContext` is frozen to `{ selection, word }` — no
- * element, no Range, no caret — so the same question goes to the document's
- * selection instead. At right-click time the caret is still where the user
- * clicked: the app reads the word under it (and, on some builds, expands the
- * range to that word) before it calls `items()`.
- *
- * Only the plugin's OWN wrapper is consulted — `MASKED_CODE_SELECTOR`, which
- * nothing but `maskCodeSpans` writes — and the hit must be inside the
- * composer, so a selection parked on the Custom Words page can never hide
- * the menu's rows.
- *
- * EVERY "cannot tell" answers FALSE, deliberately. Missing `document` (SSR, a
- * bare test sandbox), no selection, a selection with no range, an anchor that
- * is not an element, or a masked span outside the composer all fall through
- * to "not code", and the rows are offered. Suggesting a spelling for a code
- * span is a small annoyance; swallowing the suggestions in ordinary prose is
- * the bug this plugin exists to fix.
- */
-function caretInMaskedCode() {
-  try {
-    if (typeof document === 'undefined' || typeof document.getSelection !== 'function') {
-      return false;
-    }
-
-    const selection = document.getSelection();
-
-    if (!selection || !selection.rangeCount) {
-      return false;
-    }
-
-    // The anchor is the start of the selection; for the collapsed caret a
-    // right-click leaves behind it is also the focus.
-    const node = selection.anchorNode || selection.focusNode;
-
-    if (!node) {
-      return false;
-    }
-
-    const el = node.nodeType === 3 ? node.parentElement : node;
-    const masked = el && typeof el.closest === 'function' ? el.closest(MASKED_CODE_SELECTOR) : null;
-
-    return Boolean(masked && masked.closest(EDITOR_SELECTOR));
-  } catch {
-    // A selection API that throws is not evidence of a code span.
-    return false;
-  }
-}
-
-/**
  * The `composer.contextMenu` contribution area, or null when this shell has
  * no such seam.
  *
@@ -51211,15 +51127,6 @@ function suggestionItems(word, locale, storage) {
   }
 
   if (!word || !entry.ready || isKnown(entry, word, locale)) {
-    return [];
-  }
-
-  // A masked code span is not prose. Right-clicking `foo` inside `foo.ts`
-  // used to offer spellings for "foo" once the masking became invisible to
-  // the menu; the old DOM handler suppressed it with `target.closest('code')`
-  // and this restores that, reading the caret rather than the pointer. The
-  // app's menu is left exactly as it is.
-  if (caretInMaskedCode()) {
     return [];
   }
 
@@ -51786,15 +51693,32 @@ for (const [i, w] of FREQ_BLOB.split(' ').entries()) {
   }
 }
 
+/**
+ * The locale the APP is running in, taken from the environment.
+ *
+ * The composer used to be asked for its own `lang` and never had one: the
+ * editor element carries no `lang` attribute at all, so that read was always
+ * `''` and the fallback under it did all the work. The app's i18n provider
+ * writes the locale it is running in to `<html lang>` on every change
+ * (`applyDocumentLocale` -> `document.documentElement.lang`), so the document
+ * element is the real answer, and `navigator.language` is the last resort
+ * after it.
+ *
+ * `''` when neither is available, so a caller can tell "no locale anywhere"
+ * from a resolved one; activeLocale() is the one place that needs a hard
+ * default, and it says 'en' explicitly.
+ */
+function documentLocale() {
+  return document.documentElement.lang || navigator.language || '';
+}
+
 /** The locale the editor should actually be checked in. */
 function activeLocale(prefs) {
   if (prefs.language && prefs.language !== 'auto') {
     return resolveLocale(prefs.language);
   }
 
-  const el = document.querySelector(SELECTOR);
-
-  return resolveLocale(el?.lang || document.documentElement.lang || navigator.language || 'en');
+  return resolveLocale(documentLocale() || 'en');
 }
 
 /**
@@ -51807,32 +51731,34 @@ function activeLocale(prefs) {
  * invisible there, and impossible to delete from it. The header named the
  * other locale, which made the word recoverable but not obvious.
  *
- * So:
+ * So, in order:
  *   1. an explicitly configured Language wins — that is the dictionary the
  *      user picked, and the menu uses it too;
- *   2. otherwise the page follows the composer the user is actually in,
- *      exactly as activeLocale() does;
- *   3. only when NO composer is mounted (the page opened from Settings) does
- *      it fall back to a locale that HAS words, because an empty list there
- *      looks like the words were lost.
+ *   2. otherwise it uses the SAME resolution activeLocale() uses: the app's
+ *      own locale, from `<html lang>` then `navigator.language`. There is no
+ *      composer branch any more — the composer element has no `lang` of its
+ *      own to read, and this page is normally reached from Settings, where no
+ *      composer is mounted;
+ *   3. only when the environment offers no locale at all does it fall back to
+ *      a locale that HAS words, because an empty list there looks like the
+ *      words were lost.
  *
  * The page lists EVERY locale's words (see DictionaryPage), so even that
- * fallback cannot hide a word.
+ * fallback cannot hide a word: no word is ever invisible AND undeletable.
  */
 function pageLocale(prefs) {
   if (prefs.language && prefs.language !== 'auto') {
     return resolveLocale(prefs.language);
   }
 
-  // A mounted composer knows its own language; that is the one the menu will
-  // write to, so it is the one the page must add to.
-  const el = document.querySelector(SELECTOR);
+  const environment = documentLocale();
 
-  if (el) {
-    return resolveLocale(el.lang || document.documentElement.lang || navigator.language || 'en');
+  if (environment) {
+    return resolveLocale(environment);
   }
 
-  // No composer: whichever locale actually has words beats an empty list.
+  // No locale anywhere: whichever locale actually has words beats an empty
+  // list.
   let best = null;
   let bestCount = 0;
 
@@ -51896,173 +51822,6 @@ function applySpellcheck(enabled) {
   } catch {
 
     // Host refused: the underline stays off, the menu still works.
-  }
-}
-
-/** Wrap `backtick` runs so code and filenames are not underlined. */
-/**
- * A `backtick` code span, or a file name / path.
- *
- * A path (something with a separator) is unambiguous. A bare `name.ext` is
- * NOT: "e.g", "i.e", "etc" and "Mr" are ordinary prose, and masking those
- * would hide real spelling errors. So the extension list is explicit, and the
- * abbreviations that read as prose are excluded.
- */
-const FILE_EXT_RE = '(?:ts|tsx|js|jsx|mjs|cjs|py|pyi|rb|go|rs|java|kt|kts|swift|cc|cpp|hpp|cs|php|pl|lua|sh|bash|zsh|ps1|bat|json|ya?ml|toml|ini|cfg|conf|env|md|mdx|rst|txt|csv|tsv|log|png|jpe?g|gif|svg|webp|pdf|zip|tar|gz|tgz|exe|dll|so|dylib|lock|sql|html?|css|scss|less|vue|svelte|gradle|dockerfile)'
-
-/** The same span, captured, so the text can be split on it without loss. */
-const CODE_SPLIT_RE = new RegExp(
-  '(`[^`\\n]+`|(?:[A-Za-z]:)?(?:[\\w.-]+[\\\\/])+[\\w.-]+|\\b[\\w-]+\\.(?:' + FILE_EXT_RE + '|[A-Za-z0-9]{2,})\\b)',
-  'g'
-)
-
-/** Detector: does this text node contain a code span or a file name? */
-const CODE_SPAN_RE = new RegExp(CODE_SPLIT_RE.source)
-
-/**
- * Wrap `backtick` code spans and file names in <code spellcheck="false"> so
- * Chromium skips them, and UNWRAP them again when the setting is turned off.
- *
- * Two things this has to get right, both learned the hard way:
- *
- * 1. It must run on INPUT, not only on focusout. Masking only when the
- *    field loses focus means the user never sees the effect while typing —
- *    which is exactly when they are looking at the squiggles.
- *
- * 2. It must be able to UNDO itself. The composer's own reconciler
- *    (normalizeComposerEditorDom) rewrites the editor DOM on every
- *    keystroke and the draft is read back from textContent, so our <code>
- *    wrappers are transient: they are re-applied on the next input and
- *    unwrapped when the setting is switched off. Leaving them behind would
- *    corrupt the text the user typed.
- *
- * The unwrap restores the original backticks, so the text round-trips
- * exactly: `code` becomes <code>`code`</code> and back to `code`.
- */
-/**
- * Character offset of a (node, offset) position within `root`, counting only
- * text. Used to capture the caret across DOM surgery.
- */
-function characterOffset(root, node, offset) {
-  const range = document.createRange();
-
-  range.selectNodeContents(root);
-  try {
-    range.setEnd(node, offset);
-  } catch {
-    return null;
-  }
-
-  return range.toString().length;
-}
-
-/** Put the caret back at a character offset within `root`. */
-function restoreCaret(root, offset) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let remaining = offset;
-  let node = walker.nextNode();
-
-  while (node) {
-    const length = (node.nodeValue || '').length;
-
-    if (remaining <= length) {
-      const range = document.createRange();
-
-      range.setStart(node, remaining);
-      range.collapse(true);
-
-      const selection = root.ownerDocument.getSelection();
-
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      return;
-    }
-
-    remaining -= length;
-    node = walker.nextNode();
-  }
-}
-
-function maskCodeSpans(enable) {
-  for (const el of document.querySelectorAll(SELECTOR)) {
-    if (!(el instanceof HTMLElement)) {
-      continue;
-    }
-
-    // Undo: turn every <code data-sp-mask> back into its literal text. The
-    // caret is captured and restored here too — unwrapping replaces nodes
-    // exactly like masking does.
-    if (!enable) {
-      const selection = el.ownerDocument.getSelection();
-      const caret = selection && selection.rangeCount
-        ? characterOffset(el, selection.getRangeAt(0).startContainer, selection.getRangeAt(0).startOffset)
-        : null;
-
-      for (const code of Array.from(el.querySelectorAll(MASKED_CODE_SELECTOR))) {
-        const text = document.createTextNode(code.textContent || '');
-
-        code.parentNode?.replaceChild(text, code);
-      }
-
-      if (caret !== null) {
-        restoreCaret(el, caret);
-      }
-
-      continue;
-    }
-
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const targets = [];
-
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      // Skip text already inside one of our wrappers.
-      if (node.parentElement?.closest(MASKED_CODE_SELECTOR)) {
-        continue;
-      }
-
-      if (CODE_SPAN_RE.test(node.nodeValue || '')) {
-        targets.push(node);
-      }
-    }
-
-    // Splitting a text node MOVES the caret: the selection is anchored to a
-    // (node, offset) pair, and the node it points into is replaced. If the
-    // caret sat inside or right after a code span, the next keystroke would
-    // land in the wrong place — a worse bug than the squiggle we are hiding.
-    //
-    // So the caret is captured first and restored afterwards, in CHARACTER
-    // offsets within the editor, which survive the node surgery.
-    const selection = el.ownerDocument.getSelection();
-    const caret = selection && selection.rangeCount
-      ? characterOffset(el, selection.getRangeAt(0).startContainer, selection.getRangeAt(0).startOffset)
-      : null;
-
-    for (const node of targets) {
-      const frag = document.createDocumentFragment();
-
-      for (const [i, part] of (node.nodeValue || '').split(CODE_SPLIT_RE).entries()) {
-        if (!part) {
-          continue;
-        }
-
-        if (i % 2 === 1) {
-          const code = document.createElement('code');
-
-          code.spellcheck = false;
-          code.dataset.spMask = '1';
-          code.textContent = part;
-          frag.append(code);
-        } else {
-          frag.append(document.createTextNode(part));
-        }
-      }
-
-      node.parentNode?.replaceChild(frag, node);
-    }
-
-    if (caret !== null) {
-      restoreCaret(el, caret);
-    }
   }
 }
 
@@ -52378,31 +52137,6 @@ export default {
 
     ctx.addEventListener(document, 'focusin', onFocusIn, true);
 
-    // The mask has to be re-applied on INPUT, not only when the field loses
-    // focus: the composer's own reconciler rewrites the editor DOM on every
-    // keystroke and strips our <code> wrappers, and the user is looking at
-    // the squiggles exactly while they type. Masking only on focusout made
-    // the setting look like it did nothing.
-    const onInput = (event) => {
-      if (!prefs.get().excludeCodeSpans) {
-        return;
-      }
-
-      if (event.target instanceof Element && event.target.closest(EDITOR_SELECTOR)) {
-        maskCodeSpans(true);
-      }
-    };
-
-    ctx.addEventListener(document, 'input', onInput, true);
-
-    const onFocusOut = (event) => {
-      if (prefs.get().excludeCodeSpans && event.target instanceof Element && event.target.closest(EDITOR_SELECTOR)) {
-        maskCodeSpans(true);
-      }
-    };
-
-    ctx.addEventListener(document, 'focusout', onFocusOut, true);
-
     applySpellcheck(prefs.get().enabled);
 
     ctx.onDispose(() => {
@@ -52492,13 +52226,6 @@ export default {
             ctx.storage.set('prefs', next);
             applySpellcheck(next.enabled);
 
-            // Turning the code-span mask off must UNDO it — the wrappers are
-            // injected into the composer's DOM, and leaving them behind
-            // would change the text the user typed.
-            if (patch.excludeCodeSpans !== undefined) {
-              maskCodeSpans(Boolean(patch.excludeCodeSpans));
-            }
-
             // A language change re-fetches for the new locale.
             if (patch.language && patch.language !== p.language) {
               ready = null;
@@ -52545,17 +52272,6 @@ export default {
               children: locales.map((l) =>
               jsx('option', { key: l, value: l, children: l === 'auto' ? 'Automatic' : l })
               )
-            }),
-            jsx(ListRow, {
-              action: jsx(Switch, {
-                checked: p.excludeCodeSpans,
-                key: 'sw',
-                label: '',
-                onCheckedChange: (value) => set({ excludeCodeSpans: value })
-              }),
-              description: 'Do not underline `backtick` code spans, file names or paths.',
-              key: 'code',
-              title: 'Ignore code spans'
             }),
             jsx(ListRow, {
               action: jsx(Switch, {

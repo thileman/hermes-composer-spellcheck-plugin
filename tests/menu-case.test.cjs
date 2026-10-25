@@ -22,10 +22,6 @@
 //   3. the row list fits the app's 6-row cap, with Add to dictionary last
 //   4. choosing a row calls `action.replaceWord` with that row's own text
 //   5. the old injection path, the private bridge and the DOM edit are gone
-//   6. a right-click inside one of the plugin's OWN masked code spans
-//      (`code[data-sp-mask]`) contributes NO rows, while a right-click in
-//      prose still does — and every unusable selection falls through to
-//      "offer the rows", never to a silently empty menu
 //
 // None of this needs Chromium's spell checker: the plugin ranks its own
 // suggestions from its own dictionary.
@@ -34,26 +30,6 @@ const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
 const { stripLiteralsAndComments } = require('../scripts/strip-literals.cjs')
-
-function resolveDep(name) {
-  const candidates = [
-    path.join(__dirname, '..', 'node_modules', name),
-    path.join(process.env.LOCALAPPDATA || '', 'hermes', 'hermes-agent', 'node_modules', name)
-  ]
-
-  for (const c of candidates) {
-    try {
-      require.resolve(c)
-      return c
-    } catch {
-      /* try the next one */
-    }
-  }
-
-  return name
-}
-
-const { JSDOM } = require(resolveDep('jsdom'))
 
 const PLUGIN = process.env.SC_PLUGIN || path.join(__dirname, '..', 'desktop', 'plugin.js')
 const source = fs.readFileSync(PLUGIN, 'utf8')
@@ -106,22 +82,6 @@ const SDK = {
   SIDEBAR_NAV_AREA: 'sidebar-nav'
 }
 
-// A REAL selection from jsdom, wired in below. The plugin reads
-// `document.getSelection()` at call time, so a live delegate to jsdom's
-// Selection is enough to exercise the code-span guard against actual DOM
-// containment and a real `closest()` — no hand-rolled stand-in for the
-// behaviour under test.
-const selectionDom = new JSDOM(
-  '<!doctype html><html><body>' +
-    '<div role="textbox" contenteditable="true" id="editor">hello <code data-sp-mask="1">speling.ts</code> world</div>' +
-    '<p id="outside">the <code data-sp-mask="1">speling.ts</code> elsewhere</p>' +
-    '<div role="textbox" contenteditable="true" id="editor2">another speling here</div>' +
-    '</body></html>',
-  { pretendToBeVisual: true }
-)
-const selectionWindow = selectionDom.window
-const selectionDocument = selectionWindow.document
-
 // Just enough document for register() and for activeLocale(): nothing here
 // queries or mutates the composer's markup.
 const fakeDocument = {
@@ -134,8 +94,7 @@ const fakeDocument = {
   createRange: () => ({ setStart() {}, setEnd() {}, selectNodeContents() {}, toString: () => '' }),
   addEventListener() {},
   body: { dispatchEvent() {} },
-  // The caret the guard asks for.
-  getSelection: () => selectionWindow.getSelection()
+  getSelection: () => null
 }
 
 const sandbox = {
@@ -227,19 +186,6 @@ const contribution = menuRegistrations()[0]
 /** The rows the app would render for this word. */
 const rowsFor = word => contribution.data.items({ word, selection: word })
 
-/** Put the collapsed caret at (node, offset), the way a right-click leaves it. */
-function caretAt(node, offset) {
-  const range = selectionDocument.createRange()
-
-  range.setStart(node, offset)
-  range.collapse(true)
-
-  const selection = selectionWindow.getSelection()
-
-  selection.removeAllRanges()
-  selection.addRange(range)
-}
-
 /** A stand-in for the action object the app hands to onSelect. */
 function makeAction(word) {
   const calls = []
@@ -330,47 +276,7 @@ async function main() {
     check('a disabled plugin contributes no rows', reg.data.items({ word: 'english', selection: 'english' }).length, 0)
   }
 
-  console.log('\n=== 9. right-clicking inside a MASKED CODE SPAN contributes nothing ===')
-  {
-    // The old DOM handler asked the pointer event: `target.closest('code')`.
-    // The SDK's menu context is frozen to { selection, word }, so the guard
-    // asks the CARET instead — and jsdom here supplies a real selection and a
-    // real `closest()`, not a stub that re-implements the check.
-    const codeEl = selectionDocument.querySelector('#editor code[data-sp-mask]')
-
-    caretAt(codeEl.firstChild, 2)
-    check('the caret really is inside the masked span',
-      selectionWindow.getSelection().anchorNode.parentElement.closest('code[data-sp-mask]') === codeEl, true)
-    check('a misspelled word inside CODE -> no rows', rowsFor('speling').length, 0)
-
-    caretAt(codeEl, 0)
-    check('caret anchored on the <code> element itself -> no rows', rowsFor('speling').length, 0)
-
-    // The other direction, same word: ordinary prose must still be offered.
-    caretAt(selectionDocument.querySelector('#editor').firstChild, 2)
-    check('the same misspelled word in PROSE -> rows', rowsFor('speling').length > 0, true)
-    check('and they are the usual rows', rowsFor('speling')[0].label, 'spelling')
-
-    caretAt(selectionDocument.querySelector('#editor2').firstChild, 3)
-    check('prose in a second composer -> rows', rowsFor('speling').length > 0, true)
-
-    // Fallback 1: nothing selected at all.
-    selectionWindow.getSelection().removeAllRanges()
-    check('no selection -> rows are still offered', rowsFor('speling').length > 0, true)
-
-    // Fallback 2: the caret is in a masked span, but NOT in the composer.
-    caretAt(selectionDocument.querySelector('#outside code').firstChild, 2)
-    check('a masked span outside the composer -> rows are still offered', rowsFor('speling').length > 0, true)
-
-    // Fallback 3: no selection API at all (SSR, or a bare sandbox).
-    const liveGetSelection = fakeDocument.getSelection
-
-    delete fakeDocument.getSelection
-    check('no getSelection() -> rows are still offered', rowsFor('speling').length > 0, true)
-    fakeDocument.getSelection = liveGetSelection
-  }
-
-  console.log('\n=== 10. the old injection path, the bridge and the DOM edit are GONE ===')
+  console.log('\n=== 9. the old injection path, the bridge and the DOM edit are GONE ===')
   // Scan CODE, not prose: the comments above name these constructs on purpose.
   const code = stripLiteralsAndComments(source)
   for (const symbol of ['injectSuggestions', 'wireKeyboard', 'whenMenuOpen', 'closeAppMenu', 'clearInjected', 'wordAtCaret', 'replaceRange', 'teachChromosphere', 'injected']) {
