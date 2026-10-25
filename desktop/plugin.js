@@ -57,6 +57,10 @@ const ID = 'hermes-composer-spellcheck-plugin';
 const DEFAULTS = {
   enabled: true,
   language: 'auto',
+  // Whether `backtick` code spans, file names and paths are declared to the app
+  // as non-prose, so Chromium does not underline them. Off by default: it is an
+  // opt-in tidy-up, and it needs the `composer.nonProse` seam to do anything.
+  excludeCodeSpans: false,
   // Whether the sidebar shows a Spellcheck row. The Custom Words PAGE is
   // always reachable from Settings -> Plugins whether this is on or off.
   showSidebarTab: true
@@ -51003,6 +51007,132 @@ function suggest(entry, word, freq = FREQ_RANK, limit = 6) {
   return out;
 }
 // ---------------------------------------------------------------------------
+// Code spans — DECLARED to the app, never written into the composer
+// ---------------------------------------------------------------------------
+//
+// "Ignore code spans" shipped once as a DOM mask: on every keystroke the plugin
+// walked the editor's text nodes, split each one, wrapped every `backtick` span
+// and path in <code spellcheck="false">, and unwrapped them again when the
+// setting went off. It inserted the plugin's own nodes into the composer's DOM
+// and moved the caret, which a Desktop plugin may not do, so it was removed at
+// the maintainer's request. tests/no-code-masking.test.cjs still guards that
+// removal: the mask function, the wrapper marker, the tree walker and the
+// caret save/restore must not come back.
+//
+// The way back is the SEAM, not a workaround: `COMPOSER_AREAS.nonProse`
+// (upstream #144007). The plugin DECLARES which ranges of the draft are not
+// prose; the APP renders and owns the wrapper — a plain
+// <span data-composer-nonprose="code" spellcheck="false">, no styling and no
+// monospace — and its own reconciler keeps that span, because core emits it.
+// Nothing in this block creates, queries or mutates a node. Its whole output is
+// offsets into a string.
+//
+// Two consequences of the contract, both worth stating because the old code did
+// the opposite:
+//
+//   1. The seam hands over `context.text` — the draft exactly as submit would
+//      send it — so there is no DOM to walk. The old "skip text that is already
+//      inside one of our wrappers" branch has nothing left to skip: core never
+//      shows a provider its own output, and the wrapper carries no
+//      `data-ref-text`, so it stays editable and serializes as its own text.
+//   2. `start`/`end` are UTF-16 code-unit offsets, which is exactly what
+//      String#matchAll reports, so mapping a match to a range is the identity —
+//      no line/column arithmetic, and an emoji earlier in the draft shifts a
+//      range by two, not one.
+
+/**
+ * A `backtick` code span, or a file name / path.
+ *
+ * A path (something with a separator) is unambiguous. A bare `name.ext` is
+ * NOT: "e.g", "i.e", "etc" and "Mr" are ordinary prose, and hiding those would
+ * hide real spelling errors. So the extension list is explicit, and the
+ * abbreviations that read as prose are excluded — `e.g.`, `i.e.`, `etc.`,
+ * `Mr. Smith` and a one-letter extension such as `foo.x` match nothing.
+ *
+ * What excludes those is the two-character minimum plus the word boundaries:
+ * `e.g` and `foo.x` end in a single letter, and `Mr. Smith` has a space after
+ * the dot. The list is kept VERBATIM from the detector that shipped — it was
+ * written to say "only known extensions" — but the `[A-Za-z0-9]{2,}` arm beside
+ * it already admits any two-or-more-character tail, so `foo.xyz` is skipped
+ * too. Tightening that to the list alone is a behaviour change nobody asked
+ * for, so it is not made here.
+ */
+const FILE_EXT_RE = '(?:ts|tsx|js|jsx|mjs|cjs|py|pyi|rb|go|rs|java|kt|kts|swift|cc|cpp|hpp|cs|php|pl|lua|sh|bash|zsh|ps1|bat|json|ya?ml|toml|ini|cfg|conf|env|md|mdx|rst|txt|csv|tsv|log|png|jpe?g|gif|svg|webp|pdf|zip|tar|gz|tgz|exe|dll|so|dylib|lock|sql|html?|css|scss|less|vue|svelte|gradle|dockerfile)'
+
+/**
+ * Detector with the `g` flag, so one `matchAll` pass yields every span AND its
+ * offset.
+ *
+ * The old pair was a CAPTURING copy (for `String#split`) plus a test-only copy
+ * of the same source. The capturing copy is deliberately NOT restored: it
+ * existed to split a text node losslessly so the pieces could be re-assembled
+ * around the plugin's own wrapper nodes, and nothing splits a string any more —
+ * the ranges are handed over as offsets and core does the walking.
+ */
+const CODE_SPAN_RE = new RegExp(
+  '(`[^`\\n]+`|(?:[A-Za-z]:)?(?:[\\w.-]+[\\\\/])+[\\w.-]+|\\b[\\w-]+\\.(?:' + FILE_EXT_RE + '|[A-Za-z0-9]{2,})\\b)',
+  'g'
+)
+
+/**
+ * The `composer.nonProse` contribution area, or null when this shell has no
+ * such seam.
+ *
+ * Same question, same answer as `composerMenuArea()` below: the seam is
+ * detected on the EXPORT, never on a version number, because a dev build can
+ * carry it without a matching release string. `COMPOSER_AREAS.nonProse` is not
+ * in any released SDK yet (upstream #144007), so an older shell reaches
+ * `register()` with the key absent — and registering against `undefined` would
+ * file the provider into an area the app never resolves.
+ *
+ * No notice here, unlike the menu seam: with nothing registered the composer
+ * underlines code like any other text, which is the behaviour the user already
+ * has, and a notice about an option they never turned on would be noise. The
+ * settings row is hidden instead (see the settings page), so no switch is
+ * offered that could not do anything.
+ */
+function composerNonProseArea() {
+  return COMPOSER_AREAS && COMPOSER_AREAS.nonProse ? COMPOSER_AREAS.nonProse : null;
+}
+
+/**
+ * The non-prose ranges in `text`, as `{ start, end, kind }`.
+ *
+ * `kind` is only a paint hint — the app skips every kind alike — so it says
+ * `'code'` for a `backtick` span and `'path'` for a file name or a path. The
+ * offsets are the UTF-16 indices `matchAll` reports, which is the seam's own
+ * unit.
+ *
+ * A range never crosses a line: the `backtick` arm excludes `\n`, a path cannot
+ * contain whitespace, and a bare file name is a single token — so core's
+ * "split a range that crosses a newline" normalization has nothing to fix up
+ * here.
+ */
+function codeSpanRanges(text) {
+  if (typeof text !== 'string' || text === '') {
+    return [];
+  }
+
+  const ranges = [];
+
+  for (const match of text.matchAll(CODE_SPAN_RE)) {
+    // Every arm requires at least one character, so this cannot fire today;
+    // kept because an empty range is meaningless to the app either way.
+    if (!match[0]) {
+      continue;
+    }
+
+    ranges.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      kind: match[0][0] === '`' ? 'code' : 'path'
+    });
+  }
+
+  return ranges;
+}
+
+// ---------------------------------------------------------------------------
 // Composer context menu — an SDK contribution, not a DOM injection
 // ---------------------------------------------------------------------------
 //
@@ -52129,6 +52259,37 @@ export default {
       noticeMenuSeamMissing();
     }
 
+    // Code spans are DECLARED, not painted: one `ctx.register` with
+    // `area: COMPOSER_AREAS.nonProse` and `data: { ranges }`. The app asks every
+    // provider for the non-prose ranges of the draft it is about to render,
+    // wraps each one in a span it emits and owns, and keeps that span across
+    // its own reconciler passes. The plugin never sees a node — not the
+    // composer's, not the wrapper's.
+    //
+    // The seam is FEATURE-DETECTED exactly like the menu's: a shell without
+    // `COMPOSER_AREAS.nonProse` gets no registration, no throw and no notice,
+    // and the composer underlines code like any other text.
+    //
+    // The SETTING gates the ranges, not the registration. There is no
+    // unregister-on-toggle path to get wrong, and an empty range list from a
+    // registered provider is precisely "nothing here is code" — which is what
+    // the app asks for on a draft with none. A flip takes effect the next time
+    // the app rebuilds the composer's content (the provider is consulted on
+    // every render), so no listener is needed to push it.
+    const nonProseArea = composerNonProseArea();
+
+    if (nonProseArea) {
+      ctx.register({
+        id: 'code-spans',
+        area: nonProseArea,
+        data: {
+          ranges: ({ text } = {}) => prefs.get().excludeCodeSpans ?
+            codeSpanRanges(text) :
+            []
+        }
+      });
+    }
+
     // Re-assert on focus rather than observing document.body (watching app DOM
     // is a forbidden plugin construct): the host applies setSpellcheck to the
     // composer that exists when it is called, and focus is the one signal the
@@ -52273,6 +52434,22 @@ export default {
               jsx('option', { key: l, value: l, children: l === 'auto' ? 'Automatic' : l })
               )
             }),
+            // Offered only when the shell carries the `composer.nonProse` seam.
+            // A switch that cannot do anything is worse than an absent one, and
+            // the stored preference is left untouched, so the option is back —
+            // still set to whatever the user chose — on a build that can honour
+            // it. Same feature detection as the provider registration.
+            nonProseArea ? jsx(ListRow, {
+              action: jsx(Switch, {
+                checked: p.excludeCodeSpans,
+                key: 'sw',
+                label: '',
+                onCheckedChange: (value) => set({ excludeCodeSpans: value })
+              }),
+              description: 'Do not underline `backtick` code spans, file names or paths.',
+              key: 'code',
+              title: 'Ignore code spans'
+            }) : null,
             jsx(ListRow, {
               action: jsx(Switch, {
                 checked: p.showSidebarTab !== false,
