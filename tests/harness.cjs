@@ -9,6 +9,10 @@
 //   notifyCalls       every host.notify(), in order
 //   fetchCalls        every URL the loader asked for
 //   __useState        swapped for a stateful hook by the page tests
+//   load({ composerAreas })  extra COMPOSER_AREAS keys the SDK stub exports, so
+//                     a suite can simulate a shell that carries a seam the
+//                     released one does not (e.g. `nonProse`) — or, by leaving
+//                     one out, a shell that predates it
 //
 // This file is not named *.test.cjs, so scripts/run-tests.cjs does not run it
 // as a suite of its own.
@@ -37,7 +41,7 @@ function resolveDep(name) {
   return name
 }
 
-function load() {
+function load(opts = {}) {
   const source = fs.readFileSync(PLUGIN, 'utf8')
 
   const notifyCalls = []
@@ -70,7 +74,7 @@ function load() {
     },
     Button: 'Button',
     Codicon: 'Codicon',
-    COMPOSER_AREAS: { contextMenu: 'composer.contextMenu' },
+    COMPOSER_AREAS: { contextMenu: 'composer.contextMenu', ...(opts.composerAreas || {}) },
     EmptyState: 'EmptyState',
     Input: 'Input',
     ListRow: 'ListRow',

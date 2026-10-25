@@ -41,6 +41,13 @@ cannot provide: a working suggestion menu.
   leave the word underlined after you accepted it.
 - **Custom words.** Add a word from the right-click menu or from the
   **Custom Words** page; it stops being flagged immediately.
+- **Optionally ignores code spans.** Turn on **Ignore code spans** and
+  `` `backtick` `` runs, file names and paths are not underlined — without the
+  plugin touching the composer: it *declares* which ranges of the draft are
+  code and the app renders and owns the wrapper. That seam
+  (`COMPOSER_AREAS.nonProse`) is an open upstream PR and is in no release yet,
+  so on a build without it the switch is not offered at all; see
+  [Install](#install).
 - **Settings** live under **Settings → Plugins → Composer Spell Check**, and
   the word list is on its own page at `/spellcheck-dictionary`. A
   **Show in the sidebar** switch controls whether a **Spellcheck** row
@@ -59,18 +66,26 @@ Then press `⌘K` → **Reload desktop plugins**. The plugin appears in
 **Capabilities → Plugins**, where you can turn it off.
 
 `requires_hermes` is `>=0.22.5`. On 0.22.5 the plugin loads and the dictionary
-and the Custom Words page work; the right-click suggestions need a release that
-carries the `COMPOSER_AREAS.contextMenu` seam — merged upstream
-([#143678](https://github.com/NousResearch/hermes-agent/pull/143678)) and
-unreleased — so on 0.22.5 only the menu rows and the underline are missing, and
-the plugin says so once.
+and the Custom Words page work. Three features need a newer core, and each is
+feature-detected on the SDK export rather than gated on a version string:
+
+| feature | needs | state upstream |
+|---|---|---|
+| right-click suggestions | `COMPOSER_AREAS.contextMenu` | merged ([#143678](https://github.com/NousResearch/hermes-agent/pull/143678)), in no release yet |
+| the red underline | `host.composer.setSpellcheck` | open ([#143057](https://github.com/NousResearch/hermes-agent/pull/143057)), in no release yet |
+| *Ignore code spans* | `COMPOSER_AREAS.nonProse` | open ([#144007](https://github.com/NousResearch/hermes-agent/pull/144007)), in no release yet |
+
+On 0.22.5 the menu rows, the underline and the code-span switch are simply
+missing: the plugin says so once about the menu, and the other two are absent
+without ceremony — it is never refused at install time.
 
 ## Using it
 
 **Suggest a correction.** Right-click a word with a squiggle under it. The
 suggestions appear in their own section of the menu; click one to replace the
-word. They are offered wherever the app draws its menu: every word is checked
-against the dictionary, so there is no separate "this is code" mode to turn on.
+word. They are offered everywhere the app draws its menu, for every word in the
+draft: **Ignore code spans** only stops the *underline* on code, it never
+suppresses the suggestions.
 
 **Add a word for good.** Right-click the word → **Add to dictionary**. The
 word is saved and the plugin stops flagging it immediately — no more
@@ -96,6 +111,7 @@ people expect from a search box. Matching is case-insensitive.
 |---|---|
 | Check spelling | the master switch: turns the squiggles **and** the right-click suggestions on and off together. On a build without `host.composer.setSpellcheck` there are no squiggles to turn on, so turning it off removes the suggestion rows. |
 | Language | which dictionary to use — *Automatic* (the default) follows the app's language |
+| Ignore code spans | leaves `` `code` ``, file names and paths unflagged. Off by default. Needs a Hermes that carries the `COMPOSER_AREAS.nonProse` seam — an open upstream PR, in no release yet — and the row is hidden on a build without it, so no switch is offered that could not work. |
 | Show in the sidebar | shows a **Spellcheck** row in the sidebar. The Custom Words page is always available from the settings, whether the row is shown or not. |
 
 ## How it works, and why it looks the way it does
@@ -153,6 +169,17 @@ data or asks for an effect; the app performs it.
   `host.composer.setSpellcheck(null, enabled)` is how the app is asked to turn
   it on. It is not in a released SDK yet, so it is feature-detected — see
   [the trade-off](#the-setspellcheck-trade-off) below.
+- **Code spans are declared, not painted.** One `ctx.register` with
+  `area: COMPOSER_AREAS.nonProse` and `data: { ranges }`. `ranges({ text })`
+  returns `{ start, end, kind }` — UTF-16 offsets into the draft exactly as
+  submit would send it, `'code'` for a `` `backtick` `` span and `'path'` for a
+  file name or path — and the app wraps each one in a span it renders and owns,
+  so the wrapper survives the app's own reconciler and the text round-trips
+  without the plugin doing anything. The plugin never sees a node: there is no
+  wrapper to undo and no caret to restore. A path or a `backtick` span is
+  unambiguous; a bare `name.ext` is not, so it counts only when the tail is at
+  least two characters and ends at a word boundary — `e.g`, `i.e`, `etc` and
+  `Mr` stay prose, as does `foo.x`.
 
 ## Disclosures
 
@@ -201,10 +228,15 @@ installing it. This plugin:
   been released, so on a shell without it the call is skipped, Chromium's spell
   check stays off (no red squiggles), and the plugin's own suggestions keep
   working while **Check spelling** is on.
-- **Writes nothing into the composer's DOM.** No attributes, no wrappers, no
-  nodes, no caret moves: the plugin contributes rows, reads the draft through
-  `host.composer`, and asks the app to flip spell check on. A build without
-  `setSpellcheck` simply keeps Chromium's underline off.
+- **Writes nothing into the composer's DOM.** No attributes, no wrappers of its
+  own, no nodes, no caret moves. The plugin contributes menu rows, reads the
+  draft through `host.composer` (and, for code spans, through the plain `text`
+  the seam hands it), and asks the app to flip spell check on. Even **Ignore
+  code spans** — the one setting that changes how the composer looks — changes
+  nothing itself: it *declares* the draft's non-prose ranges through
+  `COMPOSER_AREAS.nonProse`, and the app renders and owns the
+  `<span data-composer-nonprose>` wrapper. A build without `setSpellcheck`
+  simply keeps Chromium's underline off.
 - **Does not** collect telemetry, read files outside the app's own data
   directory, run shell commands, or start background processes.
 
@@ -217,10 +249,28 @@ so no red squiggles), and everything else keeps working. The plugin computes
 and ranks its own suggestions from its own dictionary, so right-clicking a
 misspelling still offers the right corrections and applies them — Chromium
 only paints the underline. `plugin.yaml`'s floor is `>=0.22.5`: a 0.22.5 host
-has neither this seam nor `COMPOSER_AREAS.contextMenu`, so what it gets is the
-dictionary and the Custom Words page, and neither the squiggles nor the
-right-click rows; when the API lands, the squiggles light up with no further
-change here.
+has none of the three seams (`contextMenu`, `setSpellcheck`, `nonProse`), so
+what it gets is the dictionary and the Custom Words page — no squiggles, no
+right-click rows, and no code-span switch. Each of the three lights up on its
+own as soon as the SDK carrying it is there, with no further change here.
+
+### The `composer.nonProse` trade-off
+
+**Ignore code spans** used to be the plugin's one DOM write: it wrapped code
+spans in its own `<code spellcheck="false">` nodes and unwrapped them again,
+which moved the caret and fought the composer's reconciler. That is gone for
+good — see [`tests/no-code-masking.test.cjs`](tests/no-code-masking.test.cjs),
+which fails if any of it comes back. The setting now only *declares* ranges
+through `COMPOSER_AREAS.nonProse`
+([#144007](https://github.com/NousResearch/hermes-agent/pull/144007)), and the
+app renders and owns the wrapper.
+
+The trade-off is that the seam is not in a release yet, so on any published
+build today the switch is **hidden** rather than present-but-dead: the plugin
+registers no provider (nothing to mis-file), and the settings page omits the
+row. The stored preference is left alone, so a user who turns it on in a build
+that carries the seam keeps it on across builds. There is no DOM fallback and
+there will not be one.
 
 ## Development
 
@@ -257,7 +307,8 @@ None of them raise an error at build time.
 | suite | what it proves |
 |---|---|
 | `tests/jsx-args.test.cjs` | no `jsx()` call passes children as the third argument (React's automatic runtime treats it as the *key*, so the element renders empty) |
-| `tests/no-code-masking.test.cjs` | the code-span masking is ABSENT: no `maskCodeSpans`/`caretInMaskedCode`/`MASKED_CODE_SELECTOR`, no `data-sp-mask` write, no `excludeCodeSpans` preference, no settings row for it, no `input`/`focusout` listener that rewrites the composer, and nothing that creates nodes or reads a caret — a re-added mask fails here |
+| `tests/no-code-masking.test.cjs` | the code-span MASKING is ABSENT: no `maskCodeSpans`/`caretInMaskedCode`/`MASKED_CODE_SELECTOR`, no `data-sp-mask` write, no `CODE_SPLIT_RE`, no `input`/`focusout` listener that rewrites the composer, and nothing that creates nodes or reads a caret — the feature is a declared range provider now, and a re-added mask fails here |
+| `tests/code-span-ranges.test.cjs` | *Ignore code spans* declares exact UTF-16 ranges (`code` for a `` `backtick` `` span, `path` for a file name or path) for a draft, leaves `e.g`/`i.e`/`etc`/`Mr`/`foo.x` in prose, registers the provider only on a shell that carries `COMPOSER_AREAS.nonProse`, is gated live by the real settings switch, and makes no DOM call of any kind — counted at runtime and grepped in the source |
 | `tests/selectors.test.cjs` | the composer is found by role, not by the app's private slot names |
 | `tests/sidebar-toggle.test.cjs` | flipping the *Show in the sidebar* switch removes the row and leaves the page reachable — driven through the real settings switch |
 | `tests/settings-custom-words-link.test.cjs` | the *Custom Words* link targets the settings sub-page, not the top-level route that closes Settings |
@@ -325,8 +376,8 @@ Contributions are welcome — open an issue or a pull request.
   [hermes-agent](https://github.com/NousResearch/hermes-agent) rather than
   reaching into the app's markup.
 - **Keep the surface small.** The plugin's contribution areas are a route, a
-  sidebar row, a settings page and a composer context-menu contribution. New
-  UI goes in one of those.
+  sidebar row, a settings page, a composer context-menu contribution and a
+  `composer.nonProse` range provider. New UI goes in one of those.
 
 **Reporting a bug:** please include your Hermes version
 (`Help → About`), your OS, and what you expected versus what happened. For a
