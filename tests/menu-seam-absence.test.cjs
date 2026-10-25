@@ -125,8 +125,9 @@ function load({ contextMenu = true, notify = true } = {}) {
     SIDEBAR_NAV_AREA: 'sidebar-nav'
   }
 
-  // No composer in this sandbox: `caretInMaskedCode()` answers "cannot tell",
-  // which is deliberately "not code", so it never hides the rows under test.
+  // No composer and no selection in this sandbox: the plugin resolves its
+  // locale from `documentElement.lang`, so nothing here hides the rows under
+  // test.
   const fakeDocument = {
     documentElement: { lang: 'en' },
     querySelector: () => null,

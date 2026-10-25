@@ -261,8 +261,9 @@ async function main() {
   {
     const code = stripLiteralsAndComments(source)
 
-    // createTextNode/getSelection still exist in maskCodeSpans, which edits
-    // the editor on purpose; the correction path must not use them.
+    // The correction path must never edit the editor's DOM. (The code-span
+    // mask that used to createTextNode() does not exist any more; see
+    // no-code-masking.test.cjs.)
     for (const construct of ['execCommand', 'insertNode', 'deleteContents', 'collapseToEnd']) {
       check(`"${construct}" is gone`, code.includes(construct), false)
     }
