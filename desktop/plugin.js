@@ -53,32 +53,6 @@ import { jsx, jsxs } from 'react/jsx-runtime';
 
 const ID = 'hermes-composer-spellcheck-plugin';
 
-/** Main composer + message editor share this slot. */
-/**
- * The composer's editable element, by ROLE rather than by the app's internal
- * markup: the Desktop Plugin SDK forbids "reaching into the app's ... own
- * markup (querying data-slot / data-tour / data-sidebar / data-testid
- * elements from document ... to restyle, hide, click or rewrite core UI)", and
- * a plugin that needs a capability the SDK lacks should ask for a hook rather
- * than patch around it.
- *
- * The composer's editable div carries role="textbox" and an aria-label —
- * public accessibility attributes that mean the same thing to assistive tech
- * and to us. The selector does not depend on the app's private slot names, so
- * it survives a markup change that a data-slot query would not.
- *
- * NOTHING QUERIES IT today, on purpose. The two reads it existed for are gone:
- * the code-span mask (removed at the maintainer's request — it injected nodes
- * into the composer and moved the caret) and the `lang` lookup (the composer
- * sets no `lang`, so that read was always ''; see documentLocale). What is
- * left reaches the composer only through `host.composer`. The constant stays
- * because tests/selectors.test.cjs pins it against the app's real markup, so
- * the next feature that legitimately needs the element — a
- * `composer.nonProse` seam, say — starts from a selector that is already
- * correct rather than from a fresh guess.
- */
-const EDITOR_SELECTOR = '[role="textbox"][contenteditable="true"], [role="textbox"][contenteditable=""], [role="textbox"][contenteditable="plaintext-only"]';
-const SELECTOR = EDITOR_SELECTOR;
 
 const DEFAULTS = {
   enabled: true,

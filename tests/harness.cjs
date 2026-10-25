@@ -5,8 +5,6 @@
 // the module is run in a vm context so the suites exercise the shipped code
 // rather than a copy of it. The extra bit here is the CONTROLS a test needs:
 //
-//   setComposer(el)   what document.querySelector(SELECTOR) returns — null
-//                     means "no composer is mounted"
 //   setFetch(fn)      the fetch the dictionary loader sees
 //   notifyCalls       every host.notify(), in order
 //   fetchCalls        every URL the loader asked for
@@ -170,7 +168,6 @@ function load() {
     fetchCalls,
     addWordCalls,
     removeWordCalls,
-    setComposer: (el) => { document.querySelector = () => el },
     setFetch: (fn) => { sandbox.__fetch = fn }
   }
 }
