@@ -93,8 +93,9 @@ check('no placeholder copy in the selector', EDITOR_SELECTOR.includes('Ask Herme
 
 console.log('\n=== the plugin writes no spellcheck/lang attributes onto app elements ===')
 // `el.spellcheck = ...` / `el.lang = ...` are the DOM reach this refactor
-// removed; the only remaining `spellcheck` write is on the plugin's OWN
-// <code> wrappers in maskCodeSpans, which it creates itself.
+// removed; nothing in the plugin writes an attribute onto an app element any
+// more (the code-span mask that once wrote one is gone — see
+// no-code-masking.test.cjs).
 check('no "el.spellcheck =" write', /el\.spellcheck\s*=/.test(pluginSource), false)
 check('no "el.lang =" write', /el\.lang\s*=/.test(pluginSource), false)
 check('the host seam is called instead', pluginSource.includes('setSpellcheck'), true)

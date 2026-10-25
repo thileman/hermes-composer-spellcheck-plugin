@@ -41,8 +41,6 @@ cannot provide: a working suggestion menu.
   leave the word underlined after you accepted it.
 - **Custom words.** Add a word from the right-click menu or from the
   **Custom Words** page; it stops being flagged immediately.
-- **Optionally ignores code spans** — `` `backtick` `` runs, file names and
-  paths are not underlined.
 - **Settings** live under **Settings → Plugins → Composer Spell Check**, and
   the word list is on its own page at `/spellcheck-dictionary`. A
   **Show in the sidebar** switch controls whether a **Spellcheck** row
@@ -71,9 +69,8 @@ the plugin says so once.
 
 **Suggest a correction.** Right-click a word with a squiggle under it. The
 suggestions appear in their own section of the menu; click one to replace the
-word. They are offered for prose only: with **Ignore code spans** on, a
-right-click inside a masked code span contributes no rows, so the menu is left
-exactly as the app drew it.
+word. They are offered wherever the app draws its menu: every word is checked
+against the dictionary, so there is no separate "this is code" mode to turn on.
 
 **Add a word for good.** Right-click the word → **Add to dictionary**. The
 word is saved and the plugin stops flagging it immediately — no more
@@ -88,7 +85,7 @@ showing. There you can search your words, add more (one at a time, or several
 comma-separated), and delete any you have added by mistake. The list covers
 every language you have added words in and tags each word with its dictionary,
 so switching *Language* never hides a word; new words go into the dictionary
-the composer is using. The search filters
+the app is using. The search filters
 as you type: `op` narrows to every word starting with *op*, and a query that is
 not a prefix (`code`) still matches anywhere in the word, because that is what
 people expect from a search box. Matching is case-insensitive.
@@ -99,7 +96,6 @@ people expect from a search box. Matching is case-insensitive.
 |---|---|
 | Check spelling | the master switch: turns the squiggles **and** the right-click suggestions on and off together. On a build without `host.composer.setSpellcheck` there are no squiggles to turn on, so turning it off removes the suggestion rows. |
 | Language | which dictionary to use — *Automatic* (the default) follows the app's language |
-| Ignore code spans | leaves `` `code` ``, file names and paths unflagged |
 | Show in the sidebar | shows a **Spellcheck** row in the sidebar. The Custom Words page is always available from the settings, whether the row is shown or not. |
 
 ## How it works, and why it looks the way it does
@@ -135,10 +131,9 @@ data or asks for an effect; the app performs it.
   asks for rows when it opens the composer's menu, renders them as its own
   section, orders them, caps the count, closes the menu and restores the caret
   before it calls each row's `onSelect`. The plugin never queries or mutates that menu;
-  the old DOM injection and private bridge are gone. The one thing it reads
-  back is its own `code[data-sp-mask]` wrapper: if the caret sits inside one,
-  it contributes no rows, so a right-click in a masked code span offers no
-  spellings for code. On a Hermes too old to have that seam — 0.22.5 is the
+  the old DOM injection and private bridge are gone. It reads nothing back out
+  of the composer either — no element, no selection, no caret. On a Hermes too
+  old to have that seam — 0.22.5 is the
   oldest release this plugin loads on, and it has no `contextMenu` area — the
   plugin still loads and its Custom Words page and dictionary work, but the
   right-click suggestions are unavailable, and it says so once rather than
@@ -177,8 +172,9 @@ installing it. This plugin:
   **When it fetches.** The **Language** setting defaults to **Automatic**,
   which follows the app's language, and the active locale is loaded once as
   the plugin registers — not lazily on the first right-click. The locale is
-  resolved from the composer's own `lang`, then the document's language, then
-  the browser's (`navigator.language`), so a user whose *app or OS* language
+  resolved from the document's language (`<html lang>`, which the app's i18n
+  provider keeps current), then the browser's (`navigator.language`), so a
+  user whose *app or OS* language
   maps to a non-English dictionary (German, French, Chinese, …) fetches on
   first run without ever changing the plugin's setting. Changing
   **Language** re-fetches for the new locale. A locale the plugin has
@@ -205,13 +201,10 @@ installing it. This plugin:
   been released, so on a shell without it the call is skipped, Chromium's spell
   check stays off (no red squiggles), and the plugin's own suggestions keep
   working while **Check spelling** is on.
-- **Wraps code spans in `<code spellcheck="false">`** inside the composer when
-  *Ignore code spans* is on. This is deliberate and it is the one place the
-  plugin still edits the editor's DOM; a core-owned seam for it has been
-  requested upstream but does not exist yet. It undoes itself: the wrappers are
-  unwrapped when the setting is switched off and the text round-trips
-  byte-for-byte. The selectors it uses are public accessibility attributes
-  (`role="textbox"` + `contentEditable`), not the app's internal markup slots.
+- **Writes nothing into the composer's DOM.** No attributes, no wrappers, no
+  nodes, no caret moves: the plugin contributes rows, reads the draft through
+  `host.composer`, and asks the app to flip spell check on. A build without
+  `setSpellcheck` simply keeps Chromium's underline off.
 - **Does not** collect telemetry, read files outside the app's own data
   directory, run shell commands, or start background processes.
 
@@ -256,15 +249,15 @@ functions out of it — nothing is re-implemented, so a test cannot pass while
 the shipped code is broken. They exist because the failures they cover are
 all *silent*: a dead Tailwind class renders invisible text, a `jsx()` call
 that passes children as the third argument renders an empty element, a
-code-span mask that cannot be undone corrupts the user's draft, and a helper
+settings row that writes into the app's own DOM breaks on the app's next
+refactor of it, and a helper
 that was lost in an edit throws only when the feature that calls it is used.
 None of them raise an error at build time.
 
 | suite | what it proves |
 |---|---|
 | `tests/jsx-args.test.cjs` | no `jsx()` call passes children as the third argument (React's automatic runtime treats it as the *key*, so the element renders empty) |
-| `tests/mask-code-spans.test.cjs` | code spans are masked and unmasked, the text round-trips byte-for-byte, and the caret survives the DOM surgery |
-| `tests/pattern.test.cjs` | `src/app.ts` matches; `e.g.`, `i.e.`, `etc.` and `a.b.c` do not |
+| `tests/no-code-masking.test.cjs` | the code-span masking is ABSENT: no `maskCodeSpans`/`caretInMaskedCode`/`MASKED_CODE_SELECTOR`, no `data-sp-mask` write, no `excludeCodeSpans` preference, no settings row for it, no `input`/`focusout` listener that rewrites the composer, and nothing that creates nodes or reads a caret — a re-added mask fails here |
 | `tests/selectors.test.cjs` | the composer is found by role, not by the app's private slot names |
 | `tests/sidebar-toggle.test.cjs` | flipping the *Show in the sidebar* switch removes the row and leaves the page reachable — driven through the real settings switch |
 | `tests/settings-custom-words-link.test.cjs` | the *Custom Words* link targets the settings sub-page, not the top-level route that closes Settings |
@@ -279,7 +272,7 @@ None of them raise an error at build time.
 | `tests/menu-failure-reporting.test.cjs` | a correction that could not be applied now says so instead of closing the menu silently; a `host.notify` that throws (or is missing) never escapes the plugin; and nothing is written onto the composer for the plugin's own bookkeeping any more |
 | `tests/docs-truth.test.cjs` | the README and the in-app description describe the switch the code implements: *Check spelling* gates the squiggles **and** the suggestion rows, and "Add a word" no longer promises a squiggle on a build that cannot paint one |
 | `tests/custom-word-toast.test.cjs` | the "Added …" / "already in your custom words" toasts quote the word as STORED (`hermes`), not the raw selection (`Hermes`) the list does not contain |
-| `tests/dictionary-page-locale.test.cjs` | the Custom Words page lists every locale's words, adds to the locale the composer is in (not "the longest list"), and can delete a word from another locale — driven through the real Add field and Remove buttons |
+| `tests/dictionary-page-locale.test.cjs` | the Custom Words page lists every locale's words, adds to the locale the app is running in (not "the longest list"), and can delete a word from another locale — driven through the real Add field and Remove buttons; also that the locale is resolved from `<html lang>`/`navigator.language` and the composer element is never queried |
 | `tests/locale-options.test.cjs` | the Language dropdown offers exactly the locales `LOCALE_MAP`/`loadDictionary()` can load — including `en-GB`, `en-AU` and `en-CA` — and every option resolves to its own dictionary rather than to English |
 
 ### Checks
